@@ -42,9 +42,6 @@
 (defvar opencode-part-type (make-hash-table :test 'equal)
   "Mapping of part id's to their type.")
 
-(defvar-local opencode--extra-parts nil
-  "An list containing extra parts to send with the next input.")
-
 (defvar opencode--event-subscription nil
   "SSE event process for the global event stream.")
 
