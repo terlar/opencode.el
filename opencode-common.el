@@ -55,6 +55,25 @@
   "Return DIRECTORY as a canonical directory name."
   (file-name-as-directory (file-truename directory)))
 
+(defun opencode--longest-backtick-run (text)
+  "Return the length of the longest run of backticks in TEXT."
+  (let ((start 0)
+        (longest 0))
+    (while (string-match "`+" text start)
+      (setq longest (max longest (- (match-end 0) (match-beginning 0)))
+            start (match-end 0)))
+    longest))
+
+(defun opencode--fenced-block (text &optional language)
+  "Return TEXT in a Markdown fenced block labeled LANGUAGE."
+  (let* ((text (or text ""))
+         (fence (make-string (max 3 (1+ (opencode--longest-backtick-run text)))
+                             ?`)))
+    (concat fence (or language "") "\n"
+            text
+            (unless (string-suffix-p "\n" text) "\n")
+            fence)))
+
 (defcustom opencode-toast-function 'opencode--default-toast-show
   "Function to use to show toast notifications.
 It receives a single argument, PROPERTIES, which is an alist with string keys

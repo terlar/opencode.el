@@ -131,18 +131,6 @@ BODY is evaluated inside `(let-alist tool-args ...)'."
    todos
    "\n"))
 
-(defun opencode--fenced-block (text language)
-  "Return TEXT in a LANGUAGE fence longer than any backtick run in TEXT."
-  (let ((length 3)
-        (start 0))
-    (while (string-match "`+" text start)
-      (setq length (max length (1+ (- (match-end 0) (match-beginning 0))))
-            start (match-end 0)))
-    (let ((fence (make-string length ?`)))
-      (concat fence language "\n" text
-              (unless (string-suffix-p "\n" text) "\n")
-              fence))))
-
 (defun opencode--format-edit-diff (old-string new-string)
   "Generate diff output comparing OLD-STRING to NEW-STRING."
   (with-temp-buffer

@@ -12,22 +12,7 @@
 ;;; Code:
 
 (require 'json)
-
-(defun opencode--markdown-fence (text &optional language)
-  "Return TEXT in a Markdown fenced block labeled LANGUAGE."
-  (let ((text (or text ""))
-        (start 0)
-        (longest-backticks 0))
-    (while (string-match "`+" text start)
-      (setq longest-backticks
-            (max longest-backticks
-                 (- (match-end 0) (match-beginning 0)))
-            start (match-end 0)))
-    (let ((fence (make-string (max 3 (1+ longest-backticks)) ?`)))
-      (concat fence (or language "") "\n"
-              text
-              (unless (string-suffix-p "\n" text) "\n")
-              fence))))
+(require 'opencode-common)
 
 (defun opencode--conversation-json (value)
   "Return VALUE encoded as pretty JSON."
@@ -47,7 +32,7 @@
     (when (and text (not (string-empty-p text)))
       (if (alist-get 'synthetic part)
           (concat "### Synthetic context\n\n"
-                  (opencode--markdown-fence text "text"))
+                  (opencode--fenced-block text "text"))
         text))))
 
 (defun opencode--conversation-format-reasoning-part (part)
@@ -55,7 +40,7 @@
   (when-let ((text (alist-get 'text part)))
     (unless (string-empty-p text)
       (concat "### Reasoning\n\n"
-              (opencode--markdown-fence text "text")))))
+              (opencode--fenced-block text "text")))))
 
 (defun opencode--conversation-format-tool-part (part)
   "Return Markdown for tool call PART."
@@ -72,12 +57,12 @@
               (format "Title: %s" .state.title))
             (when .state.input
               (concat "Input:\n\n"
-                      (opencode--markdown-fence
+                      (opencode--fenced-block
                        (opencode--conversation-json .state.input)
                        "json")))
             (when .state.output
               (concat "Output:\n\n"
-                      (opencode--markdown-fence .state.output "text")))))
+                      (opencode--fenced-block .state.output "text")))))
      "\n\n")))
 
 (defun opencode--conversation-format-file-part (part)

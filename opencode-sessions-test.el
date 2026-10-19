@@ -110,6 +110,31 @@ for session \"session\" and assistant message \"message\" render here."
       (search-forward "> ")
       (should (get-char-property (- (point) 2) 'invisible)))))
 
+(ert-deftest opencode-session-label-visible-text-test ()
+  "Show only the label name, even right after the invisible prompt."
+  (dolist (case '(("AGENTS.md" . "`AGENTS.md`")
+                  ("a`b" . "``a`b``")
+                  ("`x`" . "`` `x` ``")))
+    (with-opencode-session-test-buffer
+      (opencode--output "Hi!\n\n")
+      (opencode--show-prompt)
+      (let* ((start (point))
+             (ov (opencode--insert-intangible (car case) 'buffer-name (car case))))
+        (font-lock-ensure)
+        (should (equal (cdr case)
+                       (buffer-substring-no-properties start (overlay-end ov))))
+        ;; Why it's a substring check and not equal:
+        ;; in the `` `x` `` case the padding spaces stay visible.
+        ;; The visible text is `` " `x` " ``, not `` "`x`" ``, so `equal` would fail there.
+        ;; if this is fixed in markdown-ts-mode, can change to equal
+        (should (string-search
+                 (car case)
+                 (cl-loop for pos from start below (overlay-end ov)
+                          unless (invisible-p pos)
+                          concat (string (char-after pos)))))
+        (should (invisible-p start))
+        (should (invisible-p (1- (overlay-end ov))))))))
+
 (ert-deftest opencode-session-diff-refinement-test ()
   "Refine entire synthetic hunks without touching input or earlier output."
   (with-opencode-session-test-buffer

@@ -538,14 +538,20 @@ in webchat."
   "Insert an intangible label with NAME (buffer or filename).
 Assign the overlay EXTRA-PROP with EXTRA-VALUE."
   (let* ((start (point))
-         (end (progn (insert "`")
-                     (insert (propertize name 'cursor-intangible t))
-                     (insert (propertize "`" 'rear-nonsticky t))
-                     (point)))
-         (ov (make-overlay start end)))
+         ;; markdown-ts hides the delimiters, so NAME is shown as code
+         (delimiter (make-string (1+ (opencode--longest-backtick-run name)) ?`))
+         (padding (if (or (string-prefix-p "`" name)
+                          (string-suffix-p "`" name))
+                      " "
+                    ""))
+         (end (progn
+                (insert (propertize (concat delimiter padding name padding)
+                                    'cursor-intangible t))
+                (insert (propertize delimiter 'rear-nonsticky t))
+                (point)))
+         (ov (make-overlay start end nil t nil)))
     (overlay-put ov 'opencode-label t)
     (overlay-put ov extra-prop extra-value)
-    (overlay-put ov 'display (propertize name 'face 'markdown-ts-code))
     (overlay-put ov 'modification-hooks '(opencode--remove-label))
     ov))
 
