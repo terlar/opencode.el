@@ -449,6 +449,10 @@ Isolate conventional code-block fontification from session properties."
   (visual-line-mode)
   (yank-media-handler "\\`image/" #'opencode--yank-image))
 
+;; Markdown hides whole fence lines, including their newline, only in view mode.
+;; this also allows us to call markdown-ts-table-align-table in the buffer
+(derived-mode-add-parents 'opencode-session-mode '(markdown-ts-view-mode))
+
 (defun opencode-yank-code-block ()
   "Yank the code inside the markdown code block under point."
   (interactive)
@@ -803,48 +807,38 @@ Preserve any pending input context while sending STRING as a plain prompt."
 
 (defun opencode--align-output-table (beg end)
   "Align the completed Markdown table between BEG and END.
-Use Markdown's table command in an isolated buffer, then apply only its
-text changes so session properties and markers survive on unchanged text."
-  (let ((source (current-buffer))
-        (text (buffer-substring-no-properties beg end))
+Markdown's table command applies only its text changes, so session
+properties and markers survive on unchanged text."
+  (let ((final-newline (eq (char-before end) ?\n))
+        (end (copy-marker end t))
         (output-properties
          (cl-loop for property in '(field read-only insert-in-front-hooks
                                     inhibit-line-move-field-capture front-sticky)
                   for value = (get-text-property beg property)
                   when value append (list property value)))
         (inhibit-read-only t))
-    (save-excursion
-      (with-temp-buffer
-        ;; Automatic context modes schedule timers which run in whichever
-        ;; buffer is current later, potentially overriding the session's RET.
-        ;; Enable only the table context needed by the alignment command.
-        (let ((markdown-ts-enable-table-mode nil)
-              (markdown-ts-enable-code-block-context-mode nil))
-          (delay-mode-hooks (markdown-ts-mode)))
-        (insert text)
-        (goto-char (point-min))
-        (markdown-ts-in-table-mode 1)
-        (markdown-ts-table-align-table t)
-        ;; The command always adds a newline.  Do not introduce one if the
-        ;; final text part ended at the last cell instead.
-        (unless (string-suffix-p "\n" text)
-          (when (eq (char-before (point-max)) ?\n)
-            (delete-region (1- (point-max)) (point-max))))
-        (let ((aligned (current-buffer)))
-          (with-current-buffer source
-            (save-restriction
-              (narrow-to-region beg end)
-              (replace-buffer-contents aligned)
-              ;; Diff insertion preserves existing cells, but newly inserted
-              ;; padding also needs comint's output field and protection.
-              (when output-properties
-                (let ((pos (point-min)))
-                  (while (< pos (point-max))
-                    (let ((next (next-single-property-change pos 'field nil (point-max))))
-                      (unless (get-text-property pos 'field)
-                        (add-text-properties pos next output-properties))
-                      (setq pos next)))))
-              (opencode--buttonize-file-references (point-min) (point-max)))))))))
+    (unwind-protect
+        (save-excursion
+          (goto-char beg)
+          ;; The command only aligns tables with an in-table overlay.
+          (markdown-ts-in-table-mode 1)
+          (unwind-protect
+              (markdown-ts-table-align-table t)
+            (markdown-ts-in-table-mode -1))
+          ;; The command always adds a newline.  Do not introduce one if the
+          ;; final text part ended at the last cell instead.
+          (when (and (not final-newline) (eq (char-before end) ?\n))
+            (delete-region (1- end) end))
+          ;; Diff insertion preserves existing cells, but newly inserted
+          ;; padding also needs comint's output field and protection.
+          (when output-properties
+            (let ((pos beg))
+              (while (< pos end)
+                (let ((next (next-single-property-change pos 'field nil end)))
+                  (unless (get-text-property pos 'field)
+                    (add-text-properties pos next output-properties))
+                  (setq pos next))))))
+      (set-marker end nil))))
 
 (defun opencode--align-finished-tables (&optional finished)
   "Align tables whose end is confirmed by subsequent complete output lines.

@@ -168,6 +168,20 @@ for session \"session\" and assistant message \"message\" render here."
         (while (search-forward "@@ -0 +0 @@" nil t)
           (should (get-char-property (- (point) 11) 'invisible)))))))
 
+(ert-deftest opencode-session-hidden-fence-lines-test ()
+  "Hide whole fence lines, including their newlines."
+  (with-opencode-session-test-buffer
+    (opencode--output "Text:\n\n```python\nx = 1\n```\n\nAfter\n")
+    (font-lock-ensure)
+    (goto-char (point-min))
+    (search-forward "```python")
+    (should (get-char-property (pos-bol) 'invisible))
+    (should (get-char-property (pos-eol) 'invisible))
+    (search-forward "```")
+    (should (get-char-property (pos-eol) 'invisible))
+    (search-forward "After")
+    (should-not (get-char-property (1- (pos-bol)) 'invisible))))
+
 (ert-deftest opencode-session-yank-code-block-test ()
   "Copy only code from a fenced block, including embedded fences."
   (with-opencode-session-test-buffer
