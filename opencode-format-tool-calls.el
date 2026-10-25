@@ -30,8 +30,8 @@ arguments and should return a string.
   "Register a formatter for TOOL-NAME.
 
 BODY is evaluated inside `(let-alist tool-args ...)'."
-  (declare (indent 2)
-           (debug (form symbolp body)))
+  (declare (indent 1)
+           (debug (form body)))
   (cl-with-gensyms (input-var)
     `(setf (alist-get ,tool-name opencode-tool-formatters nil nil #'equal)
            (lambda (,input-var)
@@ -39,58 +39,58 @@ BODY is evaluated inside `(let-alist tool-args ...)'."
                ,@body)))))
 
 (opencode-define-tool-formatter "edit"
-    (concat "edit " .filePath ":\n"
-            (opencode--fenced-block
-             (opencode--format-edit-diff .oldString .newString) "diff")))
+  (concat "edit " .filePath ":\n"
+          (opencode--fenced-block
+           (opencode--format-edit-diff .oldString .newString) "diff")))
 
 (opencode-define-tool-formatter "apply_patch"
-    (concat "apply_patch:\n"
-            (opencode--fenced-block
-             (opencode--format-apply-patch .patchText) "diff")))
+  (concat "apply_patch:\n"
+          (opencode--fenced-block
+           (opencode--format-apply-patch .patchText) "diff")))
 
 (opencode-define-tool-formatter "write"
-    (format "write %s" .filePath))
+  (format "write %s" .filePath))
 
 (opencode-define-tool-formatter "read"
-    (if (and .offset .limit)
-        (format "read `%s:%d` limit=%d"
-                .filePath .offset .limit)
-      (format "read %s" .filePath)))
+  (if (and .offset .limit)
+      (format "read `%s:%d` limit=%d"
+              .filePath .offset .limit)
+    (format "read %s" .filePath)))
 
 (opencode-define-tool-formatter "grep"
-    (concat
-     (format "grep \"%s\"" .pattern)
-     (when (or .include .path)
-       (format " in %s" (or .include .path)))))
+  (concat
+   (format "grep \"%s\"" .pattern)
+   (when (or .include .path)
+     (format " in %s" (or .include .path)))))
 
 (opencode-define-tool-formatter "bash"
-    (concat (when .description
-              (format "# %s\n" .description))
-            (format "$ %s" .command)))
+  (concat (when .description
+            (format "# %s\n" .description))
+          (format "$ %s" .command)))
 
 (opencode-define-tool-formatter "websearch"
-    (format "websearch \"%s\"" .query))
+  (format "websearch \"%s\"" .query))
 
 (opencode-define-tool-formatter "call_omo_agent"
-    (format "call_omo_agent: %s\n\n%s" .description .prompt))
+  (format "call_omo_agent: %s\n\n%s" .description .prompt))
 
 (opencode-define-tool-formatter "glob"
-    (if .path
-        (format "glob \"%s\" in %s"
-                .pattern
-                (opencode--relative-path-for-display .path))
-      (format "glob \"%s\"" .pattern)))
+  (if .path
+      (format "glob \"%s\" in %s"
+              .pattern
+              (opencode--relative-path-for-display .path))
+    (format "glob \"%s\"" .pattern)))
 
 (opencode-define-tool-formatter "todowrite"
-    (opencode--format-todos .todos))
+  (opencode--format-todos .todos))
 
 (opencode-define-tool-formatter "question"
-    (opencode--format-questions .questions))
+  (opencode--format-questions .questions))
 
 (opencode-define-tool-formatter "task"
-    (if (string= "explore" .subagent_type)
-        (format "🔍 Explore: %s" .description)
-      (format "🤖 Subagent Task: %s" .description)))
+  (if (string= "explore" .subagent_type)
+      (format "🔍 Explore: %s" .description)
+    (format "🤖 Subagent Task: %s" .description)))
 
 (defun opencode--format-tool-call (tool input)
   "Format TOOL call with INPUT arguments for display."
