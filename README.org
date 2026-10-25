@@ -46,6 +46,8 @@ of advantages over the official TUI:
    - add any emacs buffer to chat context with =opencode-add-buffer-dwim=
    - add files from dired to context with =opencode-add-file-dwim=
    - add selected region to context with =opencode-add-region=
+   - start a new session to fix all flycheck errors in the current buffer with
+     =opencode-fix-flycheck=
    - integration with magit is possible, =opencode-new-worktree= will create a new
      git branch and worktree for the current project, and start an opencode session in it
    - =`file`= and file:line references in LLM output are turned into clickable buttons
@@ -192,7 +194,8 @@ If a session buffer and frame is not active, emacs will show a notification when
                           opencode-select-project opencode-select-open-session
                           opencode-new-worktree opencode-new-session
                           opencode-select-idle opencode-visit-last-idle
-                          opencode-add-file-dwim opencode-add-region opencode-add-buffer-dwim)
+                          opencode-add-file-dwim opencode-add-region opencode-add-buffer-dwim
+                          opencode-fix-flycheck)
          collect (list command
                        (string-join (string-lines (documentation command)) " ")))
 #+end_src
@@ -201,7 +204,7 @@ If a session buffer and frame is not active, emacs will show a notification when
 | Command                      | Description                                                                                                                                                                                                                                          |
 |------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | opencode                     | Open opencode sessions control buffer for the current project directory. Connects to an existing server if one is running, otherwise starts a new one if ‘opencode-auto-start-server’ is non-nil.                                                    |
-| opencode-connect             | Connect to opencode server, prompting for HOST and PORT.                                                                                                                                                                                             |
+| opencode-connect             | Connect to opencode server, prompting for HOST and PORT. Call ON-CONNECT once connected.                                                                                                                                                             |
 | opencode-disconnect          | Disconnect from opencode server, optionally log EVENT.                                                                                                                                                                                               |
 | opencode-select-project      | Completing read to prompt which project to select.                                                                                                                                                                                                   |
 | opencode-select-open-session | Select among open session buffers.                                                                                                                                                                                                                   |
@@ -212,6 +215,7 @@ If a session buffer and frame is not active, emacs will show a notification when
 | opencode-add-file-dwim       | If in Dired, add all marked files, or file at point if none marked. Otherwise add the current buffer’s file. Otherwise prompt for file in current project.                                                                                           |
 | opencode-add-region          | Add the active region to context.                                                                                                                                                                                                                    |
 | opencode-add-buffer-dwim     | Add current buffer or prompt for one to add.                                                                                                                                                                                                         |
+| opencode-fix-flycheck        | Start a new opencode session to fix the current buffer’s Flycheck errors.                                                                                                                                                                            |
 
 * Question Tool
 #+CAPTION: Single choice question

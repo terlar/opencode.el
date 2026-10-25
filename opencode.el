@@ -594,10 +594,11 @@ Run CALLBACK once fetched."
                       agents))
     (funcall callback)))
 
-(cl-defun opencode-new-session (&key title callback)
+(cl-defun opencode-new-session (&key title callback initial-prompt)
   "Create a new session. With a prefix argument it will ask for TITLE.
 Without it will use a default title and then automatically generate one.
-If CALLBACK is given, it will be called with the session after it is created."
+If CALLBACK is given, it will be called with the session after it is created.
+If INITIAL-PROMPT is given, it is sent after CALLBACK is called."
   (interactive
    (when current-prefix-arg
      (list :title (read-string "Title: "))))
@@ -608,7 +609,27 @@ If CALLBACK is given, it will be called with the session after it is created."
                                       `((title . ,title))
                                     (make-hash-table))
          session
-       (opencode-open-session session :callback callback)))))
+       (opencode-open-session
+        session
+        :callback (lambda (session)
+                    (when callback
+                      (funcall callback session))
+                    (when initial-prompt
+                      (goto-char (point-max))
+                      (insert initial-prompt)
+                      (comint-send-input))))))))
+
+(defun opencode-fix-flycheck ()
+  "Start a new opencode session to fix the current buffer's Flycheck errors."
+  (interactive)
+  (unless (bound-and-true-p flycheck-mode)
+    (user-error "Flycheck is not enabled in this buffer"))
+  (let* ((default-directory (if-let* ((proj (project-current)))
+                                (project-root proj)
+                              default-directory))
+         (prompt (or (opencode--flycheck-fix-prompt default-directory)
+                     (user-error "No Flycheck errors in this buffer"))))
+    (opencode-new-session :initial-prompt prompt)))
 
 (defun opencode-toggle-mcp ()
   "Completing read to select an MCP to toggle."

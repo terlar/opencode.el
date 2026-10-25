@@ -30,27 +30,29 @@
 
 (defun opencode--flycheck-report-diagnostics (file base-directory errors)
   "Return formatted Flycheck ERRORS for FILE relative to BASE-DIRECTORY."
-  (let ((relevant-errors
-         (cl-remove-if-not
-          (lambda (err)
-            (memq (flycheck-error-level err) '(error warning)))
-          errors)))
-    (when relevant-errors
-      (mapconcat (lambda (err)
-                   (concat "- "
-                           (file-relative-name
-                            (or (flycheck-error-filename err) file)
-                            base-directory)
-                           ":"
-                           (number-to-string (or (flycheck-error-line err) 1))
-                           (when-let ((column (flycheck-error-column err)))
-                             (format ":%d" column))
-                           ": "
-                           (symbol-name (flycheck-error-level err))
-                           ": "
-                           (flycheck-error-format err nil)))
-                 relevant-errors
-                 "\n"))))
+  (when errors
+    (mapconcat (lambda (err)
+                 (concat "- "
+                         (file-relative-name
+                          (or (flycheck-error-filename err) file)
+                          base-directory)
+                         ":"
+                         (number-to-string (or (flycheck-error-line err) 1))
+                         (when-let* ((column (flycheck-error-column err)))
+                           (format ":%d" column))
+                         ": "
+                         (symbol-name (flycheck-error-level err))
+                         ": "
+                         (flycheck-error-format err nil)))
+               errors
+               "\n")))
+
+(defun opencode--flycheck-fix-prompt (base-directory)
+  "Return a prompt to fix the current buffer's Flycheck errors, or nil.
+File names are shown relative to BASE-DIRECTORY."
+  (when-let* ((report (opencode--flycheck-report-diagnostics
+                       (buffer-file-name) base-directory flycheck-current-errors)))
+    (concat "Fix the following:\n\n" report)))
 
 (defun opencode--flycheck-report-status (file base-directory status)
   "Return a formatted Flycheck STATUS report for FILE.
