@@ -643,7 +643,8 @@ If INITIAL-PROMPT is given, it is sent after CALLBACK is called."
                                        mcp-name
                                        (pcase (alist-get 'status mcp-info)
                                          ("connected" "🟢 connected")
-                                         ("disabled" "🔴 disabled")))))))
+                                         ("disabled"  "⚪ disabled")
+                                         ("failed"    "🔴 failed")))))))
       (pcase (map-nested-elt mcps `(,mcp status))
         ("connected" (opencode-api-disable-mcp (mcp)
                          _res
