@@ -31,8 +31,7 @@ This codebase uses macro-generated async API calls:
   (do-something-with result-var))
 ```
 
-### Error Handling
+### Logging
 
-- Use `error` for fatal conditions
 - Log warnings to dedicated buffer: `*opencode-event-log*`
   use `(opencode--log-event "WARNING TYPE" "msg")`

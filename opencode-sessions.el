@@ -12,6 +12,7 @@
 ;;; Code:
 
 (require 'comint)
+(require 'hideshow)
 (require 'magit)
 (require 'mailcap)
 (require 'markdown-ts-mode)
@@ -98,6 +99,9 @@
 (defvar-local opencode--table-scan-marker nil
   "Marker at the unprocessed Markdown in the current assistant text part.")
 
+(defvar-local opencode--reasoning-start nil
+  "Start of the streaming reasoning block, to fold once the next block starts.")
+
 (defvar-local opencode-session-agent nil
   "Currently active agent for this buffer's session.")
 
@@ -128,7 +132,8 @@ Requests are processed FIFO.")
   "A mapping of session ids to Emacs buffers.")
 
 (defvar-local opencode--tool-calls-displayed nil
-  "A hash table containing all callID that have already been displayed.")
+  "A hash table mapping displayed callIDs to a marker at the end of the call.
+Its output is inserted there once the call completes.")
 
 (defvar-local opencode-last-response-start nil
   "Position of the start of the latest assistant text block.")
@@ -418,6 +423,8 @@ Isolate conventional code-block fontification from session properties."
                    (opencode--fontify-code-block mode beg finish)))))
       (treesit-font-lock-fontify-region start end loudly))))
 
+(defvar evil-buffer-regexps)
+
 (define-derived-mode opencode-session-mode comint-mode "OpenCode"
   "Major mode for interacting with an opencode session."
   (setq-local comint-use-prompt-regexp nil
@@ -447,7 +454,50 @@ Isolate conventional code-block fontification from session properties."
               (cl-set-difference font-lock-extra-managed-props
                                  '(button category action help-echo display)))
   (visual-line-mode)
-  (yank-media-handler "\\`image/" #'opencode--yank-image))
+  (yank-media-handler "\\`image/" #'opencode--yank-image)
+  ;; A foldable block starts with a line whose first char has an
+  ;; `opencode-fold' property: a marker at the end of the block.
+  (setq-local hs-block-start-regexp "^."
+              hs-block-end-regexp nil
+              hs-looking-at-block-start-predicate
+              (lambda () (and (get-text-property (point) 'opencode-fold)
+                              (looking-at ".*")))
+              hs-forward-sexp-function
+              (lambda (_) (goto-char (get-text-property (point) 'opencode-fold)))
+              hs-find-block-beginning-function #'opencode--fold-beginning
+              hs-inside-comment-predicate #'ignore
+              ;; comint re-marks output read-only, which would unfold it
+              hs-set-up-overlay
+              (lambda (ov)
+                (overlay-put ov 'modification-hooks nil)
+                (overlay-put ov 'display (concat " " (overlay-get ov 'display))))
+              hs-display-lines-hidden t)
+  (hs-minor-mode)
+  ;; Evil picks a buffer's initial state from its minor modes before its
+  ;; major mode, so a minor mode like `hs-minor-mode' (normal state in
+  ;; evil-collection) would override comint's insert state.  Buffer name
+  ;; rules are checked first, so always start in insert state.
+  (setq-local evil-buffer-regexps '(("" . insert))))
+
+(defun opencode--fold-beginning ()
+  "Move to the start of the foldable block containing point, if any.
+Folds don't nest, so this is the nearest block start before point."
+  (when-let* ((start (previous-single-property-change (1+ (point)) 'opencode-fold))
+              (start (if (get-text-property start 'opencode-fold)
+                         start
+                       (previous-single-property-change start 'opencode-fold)))
+              ((>= (get-text-property start 'opencode-fold) (point))))
+    (goto-char start)))
+
+(defun opencode--fold (beg &optional end)
+  "Fold the output from BEG to END, except its first line.
+END defaults to the process marker."
+  (with-silent-modifications
+    (put-text-property beg (1+ beg) 'opencode-fold
+                       (copy-marker (opencode--output-content-end end))))
+  (save-excursion
+    (goto-char beg)
+    (hs-hide-block-at-point)))
 
 ;; Markdown hides whole fence lines, including their newline, only in view mode.
 ;; this also allows us to call markdown-ts-table-align-table in the buffer
@@ -467,8 +517,8 @@ Isolate conventional code-block fontification from session properties."
 
 (defun opencode-copy-conversation ()
   "Copy the current conversation as a Markdown transcript.
-The transcript is built from raw session messages, so hidden tool output is
-included regardless of `opencode-show-tool-output'.
+The transcript is built from raw session messages, so it includes tool
+output that isn't displayed in the session buffer, such as edit results.
 
 Useful if you have separate usage limits for opencode vs webchat, so you can let
 it gather context and start a plan in opencode, and then iterate on the plan
@@ -811,11 +861,6 @@ Markdown's table command applies only its text changes, so session
 properties and markers survive on unchanged text."
   (let ((final-newline (eq (char-before end) ?\n))
         (end (copy-marker end t))
-        (output-properties
-         (cl-loop for property in '(field read-only insert-in-front-hooks
-                                    inhibit-line-move-field-capture front-sticky)
-                  for value = (get-text-property beg property)
-                  when value append (list property value)))
         (inhibit-read-only t))
     (unwind-protect
         (save-excursion
@@ -830,15 +875,16 @@ properties and markers survive on unchanged text."
           (when (and (not final-newline) (eq (char-before end) ?\n))
             (delete-region (1- end) end))
           ;; Diff insertion preserves existing cells, but newly inserted
-          ;; padding also needs comint's output field and protection.
-          (when output-properties
-            (let ((pos beg))
-              (while (< pos end)
-                (let ((next (next-single-property-change pos 'field nil end)))
-                  (unless (get-text-property pos 'field)
-                    (add-text-properties pos next output-properties))
-                  (setq pos next))))))
+          ;; padding also needs comint's output properties.
+          (opencode--mark-as-output beg end))
       (set-marker end nil))))
+
+(defun opencode--mark-as-output (beg end)
+  "Mark text from BEG to END, inserted outside `comint-output-filter', as output."
+  (comint--mark-as-output beg end)
+  (when comint-prompt-read-only
+    (with-silent-modifications
+      (put-text-property beg end 'read-only t))))
 
 (defun opencode--align-finished-tables (&optional finished)
   "Align tables whose end is confirmed by subsequent complete output lines.
@@ -958,6 +1004,13 @@ PART-ID is id of PART"
                     (opencode--session-process-position)))
             (when last-type
               (opencode--maybe-insert-block-spacing))
+            ;; fold reasoning once the next block starts
+            (when opencode--reasoning-start
+              (opencode--fold opencode--reasoning-start)
+              (setq opencode--reasoning-start nil))
+            (when (eq current-type 'reasoning)
+              (setq opencode--reasoning-start
+                    (opencode--session-process-position)))
             (when (eq current-type 'text)
               (setq opencode--table-scan-marker
                     (copy-marker (opencode--session-process-position))))
@@ -975,9 +1028,10 @@ PART-ID is id of PART"
                     (not (gethash .callID opencode--tool-calls-displayed))
                     ;; skip the question tool, handled by question.asked event
                     (not (string= .tool "question")))
-               (puthash .callID t opencode--tool-calls-displayed)
-               (opencode--insert-tool-block .tool .state.input))
-             (opencode--maybe-insert-tool-output part))
+               (puthash .callID (opencode--insert-tool-block .tool .state.input)
+                        opencode--tool-calls-displayed))
+             (opencode--maybe-insert-tool-output
+              part (gethash .callID opencode--tool-calls-displayed)))
             ("step-finish"
              (when (string= "stop" .reason)
                (opencode--maybe-insert-block-spacing))))
@@ -1036,19 +1090,22 @@ PART-ID is id of PART"
   (unless (string-empty-p text)
     (let ((beginning (opencode--session-process-position)))
       (opencode--output text)
-      (opencode--add-margin beginning (save-excursion
-                                        (goto-char (opencode--session-process-position))
-                                        (skip-chars-backward "\r\n[:blank:]")
-                                        ;; Markdown hides closing fences, so
-                                        ;; their otherwise visible margin would
-                                        ;; appear as an extra highlighted line.
-                                        (let ((inhibit-field-text-motion t))
-                                          (beginning-of-line))
-                                        (unless (looking-at-p "[`~]\\{3,\\}[[:blank:]]*$")
-                                          (goto-char (opencode--session-process-position))
-                                          (skip-chars-backward "\r\n[:blank:]"))
-                                        (point))
-                            face))))
+      (opencode--add-margin beginning (1+ (opencode--output-content-end)) face))))
+
+(defun opencode--output-content-end (&optional pos)
+  "Return the end of the last visible line of output before POS.
+POS defaults to the process marker.  Markdown hides closing fence lines
+along with their newline, so they are excluded, or they would show as an
+extra margin line, and the line after a fold would join its first line."
+  (save-excursion
+    (goto-char (or pos (opencode--session-process-position)))
+    (skip-chars-backward "\r\n[:blank:]")
+    (let ((end (point))
+          (inhibit-field-text-motion t))
+      (beginning-of-line)
+      (if (looking-at-p "[`~]\\{3,\\}[[:blank:]]*$")
+          (1- (point))
+        end))))
 
 (defun opencode--insert-reasoning-block (text)
   "Insert TEXT as reasoning block."
@@ -1086,26 +1143,49 @@ PART-ID is id of PART"
             (goto-char (max header-end end))))))))
 
 (defun opencode--insert-tool-block (tool input)
-  "Insert TOOL call with INPUT as margin-highlighted block."
+  "Insert TOOL call with INPUT as margin-highlighted block.
+Return a marker at the end of the call, where its output goes."
   (let ((start (opencode--session-process-position)))
     (opencode--insert-block-with-margin
      (opencode--format-tool-call tool input)
      'opencode-tool-margin-highlight)
-    (opencode--maybe-insert-block-spacing)
-    (when (member tool '("edit" "apply_patch"))
-      (opencode--refine-diff-hunks start))))
+    (prog1 (save-excursion
+             (goto-char (opencode--session-process-position))
+             (skip-chars-backward "\n")
+             (point-marker))
+      (opencode--maybe-insert-block-spacing)
+      (when (member tool '("edit" "apply_patch"))
+        (opencode--refine-diff-hunks start)
+        (opencode--fold start)))))
 
-(defun opencode--maybe-insert-tool-output (message)
-  "Maybe insert the output from tool call in MESSAGE."
-  (let-alist message
+(defun opencode--maybe-insert-tool-output (part call-end)
+  "Insert the output from the completed tool call in PART at CALL-END.
+Parallel tool calls can complete after later output, so it's inserted
+after its call, folded onto the call's last line.  Shell commands run by
+the user aren't folded, and edits show only their diff."
+  (let-alist part
     (when (and (string= .state.status "completed")
-               (or opencode-show-tool-output
-                   ;; show output for user run shell commands
-                   (and (string= .tool "bash")
-                        (not .state.input.description)))
-               .state.output)
-      (opencode--output (opencode--fenced-block .state.output "text"))
-      (opencode--output "\n"))))
+               call-end
+               (marker-position call-end))
+      (when (and .state.output
+                 (not (member .tool '("edit" "write" "apply_patch" "question"))))
+        (let ((inhibit-read-only t)
+              (end (copy-marker call-end t)))
+          (save-excursion
+            (goto-char call-end)
+            (insert "\n" (opencode--fenced-block .state.output "text")))
+          (opencode--mark-as-output call-end end)
+          (opencode--buttonize-file-references call-end end)
+          (opencode--add-margin call-end (1+ (opencode--output-content-end end))
+                                'opencode-tool-margin-highlight)
+          (unless (and (string= .tool "bash") (equal .state.title ""))
+            (opencode--fold (save-excursion
+                              (goto-char (opencode--output-content-end call-end))
+                              (let ((inhibit-field-text-motion t))
+                                (line-beginning-position)))
+                            end))
+          (set-marker end nil)))
+      (set-marker call-end nil))))
 
 (defun opencode-open-session-same-window (session)
   "Open SESSION using the current window."
@@ -1126,26 +1206,25 @@ PART-ID is id of PART"
              (dolist (part (alist-get 'parts message))
                (let-alist part
                  (if (string= .type "tool")
-                     (progn
-                       (opencode--insert-tool-block .tool .state.input)
-                       (opencode--maybe-insert-tool-output message))
+                     (opencode--maybe-insert-tool-output
+                      part (opencode--insert-tool-block .tool .state.input))
                    (when .text
                      (let ((text (string-trim .text)))
                        (unless (string-empty-p text)
-                         (pcase .type
-                           ("text"
-                            (unless (equal last-part-type "text")
-                              (setf opencode-last-response-start
-                                    (opencode--session-process-position)))
-                            (setq opencode--table-scan-marker
-                                  (copy-marker (opencode--session-process-position)))
-                            (opencode--output text)
-                            (opencode--align-finished-tables t))
-                           ("reasoning"
-                            (opencode--insert-reasoning-block
-                             text)))
-                         (setq last-part-type .type)
-                         (opencode--output "\n\n"))))))))
+                         (let ((start (opencode--session-process-position)))
+                           (pcase .type
+                             ("text"
+                              (unless (equal last-part-type "text")
+                                (setf opencode-last-response-start start))
+                              (setq opencode--table-scan-marker (copy-marker start))
+                              (opencode--output text)
+                              (opencode--align-finished-tables t))
+                             ("reasoning"
+                              (opencode--insert-reasoning-block text)))
+                           (opencode--output "\n\n")
+                           (when (equal .type "reasoning")
+                             (opencode--fold start)))
+                         (setq last-part-type .type))))))))
            (setq opencode-session-tokens
                  (+ .tokens.input .tokens.output .tokens.reasoning
                     .tokens.cache.read .tokens.cache.write))))))))

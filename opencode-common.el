@@ -88,11 +88,6 @@ for title, message, variant (error/warning/info/success), and duration"
   :type 'string
   :group 'opencode)
 
-(defcustom opencode-show-tool-output nil
-  "Show output of tool calls."
-  :type 'boolean
-  :group 'opencode)
-
 (defcustom opencode-file-edited-functions
   '(opencode--fix-parens
     opencode--reload-elisp-file)

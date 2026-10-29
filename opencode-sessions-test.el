@@ -271,6 +271,95 @@ for session \"session\" and assistant message \"message\" render here."
       (should (seq-some (lambda (ov) (overlay-get ov 'line-prefix))
                         (overlays-at (+ (point-min) 9)))))))
 
+(defun opencode-session-test--folded-p (text)
+  "Return non-nil if the block whose first line contains TEXT is folded."
+  (save-excursion
+    (goto-char (point-min))
+    (search-forward text)
+    (eq 'hs (get-char-property (pos-eol) 'invisible))))
+
+(defun opencode-session-test--tool (tool status input &optional output title call-id)
+  "Display the TOOL call part with STATUS, INPUT, OUTPUT and TITLE.
+CALL-ID defaults to TOOL."
+  (opencode-session--update-part
+   tool `((sessionID . "session") (messageID . "message")
+          (tool . ,tool) (callID . ,(or call-id tool))
+          (state . ((status . ,status) (input . ,input) (output . ,output)
+                    (title . ,title))))
+   nil "tool"))
+
+(ert-deftest opencode-session-folding-test ()
+  "Fold reasoning, edit diffs and tool output, but not user shell output."
+  (with-opencode-session-test-buffer
+    (let ((part '((sessionID . "session") (messageID . "message") (text . "")))
+          (edit '((filePath . "opencode-sessions.el")
+                  (oldString . "old")
+                  (newString . "new")))
+          (grep '((pattern . "foo")))
+          (bash '((command . "ls")))
+          (agent-bash '((command . "uname")))
+          (eval '((code . "(progn\n  nil)"))))
+      (setq opencode--tool-calls-displayed (make-hash-table :test 'equal))
+      (opencode--output "request\n\n")
+      (opencode-session--update-part
+       "reasoning" part "Thinking\nmore thoughts" "reasoning")
+      (should-not (opencode-session-test--folded-p "Thinking"))
+      (opencode-session-test--tool "edit" "running" edit)
+      (should (opencode-session-test--folded-p "Thinking"))
+      (should (opencode-session-test--folded-p "edit opencode-sessions.el:"))
+      (opencode-session-test--tool "edit" "completed" edit "Edit applied")
+      (should-not (string-search "Edit applied" (buffer-string)))
+      ;; Parallel calls: each output goes after its own call.
+      (opencode-session-test--tool "grep" "running" grep)
+      (opencode-session-test--tool "bash" "running" bash)
+      (opencode-session-test--tool "bash" "running" agent-bash nil nil "agent-bash")
+      (opencode-session-test--tool "eval" "running" eval)
+      (opencode-session-test--tool "grep" "completed" grep "a.el:1\nb.el:2" "foo")
+      ;; Only a user's shell command has an empty title.
+      (opencode-session-test--tool "bash" "completed" bash "user-file" "")
+      (opencode-session-test--tool "bash" "completed" agent-bash "agent-file"
+                                   "uname" "agent-bash")
+      (opencode-session-test--tool "eval" "completed" eval "result")
+      (should (opencode-session-test--folded-p "grep \"foo\""))
+      (should-not (opencode-session-test--folded-p "$ ls"))
+      (should (opencode-session-test--folded-p "$ uname"))
+      (should (opencode-session-test--folded-p "  nil)"))
+      (should-not (opencode-session-test--folded-p "eval\n"))
+      (should (string-suffix-p
+               (concat "grep \"foo\"\n```text\na.el:1\nb.el:2\n```\n\n"
+                       "$ ls\n```text\nuser-file\n```\n\n"
+                       "$ uname\n```text\nagent-file\n```\n\n"
+                       "eval\n(progn\n  nil)\n```text\nresult\n```\n\n")
+               (buffer-substring-no-properties
+                (point-min) (opencode--session-process-position))))
+      (should (eq (get-text-property (point-min) 'field) 'output))
+      (goto-char (point-min))
+      (search-forward "b.el")
+      (should (eq (get-text-property (point) 'field) 'output))
+      (should (get-text-property (point) 'read-only))
+      (opencode-session--update-part "text" part "Done." "text")
+      (should (opencode-session-test--folded-p "Thinking"))
+      (should (opencode-session-test--folded-p "edit opencode-sessions.el:"))
+      (goto-char (point-min))
+      (search-forward "user-file")
+      (should-not (invisible-p (1- (point))))
+      ;; Toggle a fold from its header line.
+      (goto-char (point-min))
+      (search-forward "Thinking")
+      (hs-toggle-hiding)
+      (should-not (opencode-session-test--folded-p "Thinking"))
+      (hs-toggle-hiding)
+      (should (opencode-session-test--folded-p "Thinking"))
+      ;; Refold from inside an expanded body.
+      (hs-toggle-hiding)
+      (search-forward "more")
+      (hs-toggle-hiding)
+      (should (opencode-session-test--folded-p "Thinking"))
+      ;; Outside any fold, toggling does nothing.
+      (goto-char (point-min))
+      (hs-toggle-hiding)
+      (should (opencode-session-test--folded-p "Thinking")))))
+
 (ert-deftest opencode-session-table-alignment-context-test ()
   "Table alignment must not schedule a context mode in the session buffer."
   (with-opencode-session-test-buffer

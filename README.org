@@ -154,6 +154,11 @@ indicator for if the session is idle or busy. User prompts are shown with a blue
 margin highlight, information about tool calls in green, and reasoning in brown.
 These colors can be configured through the =opencode-*-margin-highlight= faces.
 
+Reasoning, tool output, and the diffs of edits are folded with =hs-minor-mode=,
+leaving their first line visible. Click the ellipsis or use =hs-toggle-hiding=
+(=C-c @ C-c=) on the first line to expand them, and =hs-show-all= (=C-c @ C-M-s=)
+to expand everything.
+
 |      Key       | Description                                                                                                                                                                                                     |
 |----------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 |      <c>       |                                                                                                                                                                                                                 |
