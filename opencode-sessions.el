@@ -568,7 +568,8 @@ restores it together with PART."
   (insert (propertize "￼"
                       'display (propertize name 'face 'markdown-ts-code-span)
                       'opencode-label-name name
-                      'opencode-part part)))
+                      'opencode-part part
+                      'rear-nonsticky t)))
 
 (defun opencode--code-span (text)
   "Return TEXT as a Markdown code span."

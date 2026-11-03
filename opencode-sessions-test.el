@@ -132,6 +132,20 @@ for session \"session\" and assistant message \"message\" render here."
         (should (equal (cons "see  now" nil)
                        (opencode--input-text-and-parts start (point))))))))
 
+(ert-deftest opencode-session-label-typing-test ()
+  "Text typed right after a label is sent as text, not as copies of the label."
+  (with-opencode-session-test-buffer
+    (opencode--output "Hi!\n\n")
+    (opencode--show-prompt)
+    (let ((start (point))
+          (part '((name . "AGENTS.md"))))
+      (opencode--insert-label "AGENTS.md" part)
+      (dolist (char (string-to-list "hi"))
+        (let ((last-command-event char))
+          (self-insert-command 1)))
+      (should (equal (cons "`AGENTS.md`hi" (list part))
+                     (opencode--input-text-and-parts start (point)))))))
+
 (ert-deftest opencode-session-diff-refinement-test ()
   "Refine entire synthetic hunks without touching input or earlier output."
   (with-opencode-session-test-buffer
