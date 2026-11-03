@@ -130,7 +130,7 @@ Designed to be set in `.dir-locals.el'"
 (defun opencode--time-ago (opencode-object type)
   "Return .time.TYPE value from OPENCODE-OBJECT, as seconds ago.
 Returns nil if the timestamp is not present."
-  (when-let ((timestamp (map-nested-elt opencode-object `(time ,type))))
+  (when-let* ((timestamp (map-nested-elt opencode-object `(time ,type))))
     (- (float-time) (/ timestamp 1000))))
 
 (defun opencode--format-time-ago (seconds)

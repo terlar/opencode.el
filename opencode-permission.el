@@ -79,7 +79,7 @@ PATTERNS is a list of glob/path patterns from the request."
                            (substring st 1))))))
       ("external_directory"
        (let* ((raw (or .parentDir .filepath
-                       (when-let ((p (car patterns)))
+                       (when-let* ((p (car patterns)))
                          (if (string-match-p "\\*" p)
                              (file-name-directory p)
                            p))))
@@ -215,13 +215,13 @@ that would be permanently approved.
 A marker is saved so the response label can be appended to the same line.
 If the session buffer is active, the response prompt is shown immediately.
 Otherwise the session is opened so the request has somewhere to remain pending."
-  (if-let (buffer (gethash session-id opencode-session-buffers))
+  (if-let* ((buffer (gethash session-id opencode-session-buffers)))
       (opencode--permission-queue-request buffer permission-id session-id
                                           type metadata patterns always)
     (opencode-api-session (session-id)
         session
       (opencode-open-session session)
-      (when-let (buffer (gethash session-id opencode-session-buffers))
+      (when-let* ((buffer (gethash session-id opencode-session-buffers)))
         (opencode--permission-queue-request buffer permission-id session-id
                                             type metadata patterns always)))))
 

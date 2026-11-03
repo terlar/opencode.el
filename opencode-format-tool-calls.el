@@ -97,7 +97,7 @@ BODY is evaluated inside `(let-alist tool-args ...)'."
   (when (alist-get 'filePath input)
     (setf (alist-get 'filePath input) (opencode--relative-path-for-display (alist-get 'filePath input))))
 
-  (if-let (tool-formatter (cdr (assoc-string tool opencode-tool-formatters)))
+  (if-let* ((tool-formatter (cdr (assoc-string tool opencode-tool-formatters))))
       (funcall tool-formatter input)
     (if (= 1 (length input))
         (let ((arg (cdar input)))

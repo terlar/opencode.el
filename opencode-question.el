@@ -304,13 +304,13 @@ On confirm, replies to the server.  On reject or dismiss, rejects."
 (defun opencode--question-request (question-id session-id questions)
   "Handle QUESTION-ID with QUESTIONS for SESSION-ID.
 Ensures the session buffer exists so pending questions are not dropped."
-  (if-let (buffer (gethash session-id opencode-session-buffers))
+  (if-let* ((buffer (gethash session-id opencode-session-buffers)))
       (opencode--queue-questions buffer question-id questions)
     (opencode-api-session (session-id)
         session
       (push session opencode-alerted-sessions)
       (opencode-open-session session)
-      (when-let (buffer (gethash session-id opencode-session-buffers))
+      (when-let* ((buffer (gethash session-id opencode-session-buffers)))
         (opencode--queue-questions buffer question-id questions)))))
 
 (provide 'opencode-question)

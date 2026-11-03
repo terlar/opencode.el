@@ -37,7 +37,7 @@
 
 (defun opencode--conversation-format-reasoning-part (part)
   "Return Markdown for reasoning PART."
-  (when-let ((text (alist-get 'text part)))
+  (when-let* ((text (alist-get 'text part)))
     (unless (string-empty-p text)
       (concat "### Reasoning\n\n"
               (opencode--fenced-block text "text")))))
@@ -71,17 +71,17 @@
    (delq nil
          (list
           "### Context file"
-          (when-let ((filename (alist-get 'filename part)))
+          (when-let* ((filename (alist-get 'filename part)))
             (format "- Filename: `%s`" filename))
-          (when-let ((mime (alist-get 'mime part)))
+          (when-let* ((mime (alist-get 'mime part)))
             (format "- MIME: `%s`" mime))
-          (when-let ((url (alist-get 'url part)))
+          (when-let* ((url (alist-get 'url part)))
             (format "- URL: `%s`" url))))
    "\n"))
 
 (defun opencode--conversation-format-agent-part (part)
   "Return Markdown for agent context PART."
-  (when-let ((name (alist-get 'name part)))
+  (when-let* ((name (alist-get 'name part)))
     (format "### Context agent\n\n@%s" name)))
 
 (defun opencode--conversation-format-part (part)
@@ -100,7 +100,7 @@
          (title (format "## %s" (capitalize role)))
          (parts (mapcar #'opencode--conversation-format-part
                         (alist-get 'parts message))))
-    (when-let ((parts (delq nil parts)))
+    (when-let* ((parts (delq nil parts)))
       (string-join (cons title parts) "\n\n"))))
 
 (defun opencode--conversation-to-markdown (messages)

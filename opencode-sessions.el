@@ -145,7 +145,7 @@ Its output is inserted there once the call completes.")
 (defmacro opencode--with-session-buffer (session-id &rest body)
   "Run BODY in the live session buffer for SESSION-ID."
   (declare (indent 1))
-  `(when-let ((buffer (gethash ,session-id opencode-session-buffers)))
+  `(when-let* ((buffer (gethash ,session-id opencode-session-buffers)))
      (when (buffer-live-p buffer)
        (with-current-buffer buffer
          ,@body))))
@@ -161,11 +161,11 @@ Its output is inserted there once the call completes.")
                          agents))))
     (when pos
       (setcar (nthcdr pos agents) opencode-session-agent)
-      (when-let ((next (seq-find
-                        (lambda (agent)
-                          (string= "primary" (alist-get 'mode agent)))
-                        (append (nthcdr (1+ pos) agents)
-                                (seq-take agents (1+ pos))))))
+      (when-let* ((next (seq-find
+                         (lambda (agent)
+                           (string= "primary" (alist-get 'mode agent)))
+                         (append (nthcdr (1+ pos) agents)
+                                 (seq-take agents (1+ pos))))))
         (setq opencode-session-agent next))))
   (force-mode-line-update))
 
@@ -259,12 +259,12 @@ Each element is (display-name . (provider-id provider-name model-id))."
   (interactive)
   (unless opencode-session-agent
     (user-error "not in a session"))
-  (when-let ((model (opencode--annotated-completion
-                     "Model: "
-                     (opencode--collect-all-models))))
+  (when-let* ((model (opencode--annotated-completion
+                      "Model: "
+                      (opencode--collect-all-models))))
     (setf (alist-get 'model opencode-session-agent) model
           opencode-last-model model)
-    (when-let ((variant (alist-get 'variant opencode-session-agent)))
+    (when-let* ((variant (alist-get 'variant opencode-session-agent)))
       (unless (alist-get variant
                          (alist-get 'variants (opencode--current-model)))
         (setq opencode-session-agent
@@ -591,7 +591,7 @@ PARTS are those of the labels in the input, which TEXT shows as code."
         chunks
         parts)
     (while (< pos end)
-      (if-let ((name (get-text-property pos 'opencode-label-name)))
+      (if-let* ((name (get-text-property pos 'opencode-label-name)))
           (progn
             (push (opencode--code-span name) chunks)
             (push (get-text-property pos 'opencode-part) parts)
@@ -647,7 +647,7 @@ PARTS are those of the labels in the input, which TEXT shows as code."
 
 (defun opencode--session-cleanup ()
   "Clean up resources for the current session buffer."
-  (when-let ((process (get-buffer-process (current-buffer))))
+  (when-let* ((process (get-buffer-process (current-buffer))))
     (delete-process process))
   (opencode--delete-temp-files opencode--temp-files)
   (setq opencode--temp-files nil))
@@ -692,9 +692,9 @@ Otherwise add the current buffer's file.
 Otherwise prompt for file in current project."
   (interactive)
   (if (derived-mode-p 'dired-mode)
-      (if-let (files (dired-get-marked-files))
+      (if-let* ((files (dired-get-marked-files)))
           (mapc #'opencode-add-file files)
-        (if-let (file (dired-get-filename nil t))
+        (if-let* ((file (dired-get-filename nil t)))
             (opencode-add-file file)
           (user-error "No file at point, and no marked files")))
     (opencode-add-file (buffer-file-name))))
@@ -980,7 +980,7 @@ PART-ID is id of PART"
       (when (string-empty-p .text)
         (puthash part-id type opencode-part-type)))
     (opencode--with-session-buffer .sessionID
-      (when-let ((message-parts (assoc-string .messageID opencode-assistant-messages)))
+      (when-let* ((message-parts (assoc-string .messageID opencode-assistant-messages)))
         (let* ((last-type (cadr message-parts))
                (last-part-id (cddr message-parts))
                (current-type (pcase type
@@ -1274,7 +1274,7 @@ If CALLBACK is given, it will be called with the session after it is initialized
                 (opencode--replay-session-messages messages)
                 (opencode-api-sessions-status
                   busy-sessions
-                  (if-let (session-status (cdr (assoc-string .id busy-sessions)))
+                  (if-let* ((session-status (cdr (assoc-string .id busy-sessions))))
                       (opencode-session--set-status
                        .id
                        (alist-get 'type session-status))
@@ -1310,7 +1310,7 @@ bound to the exchange ids at point."
   (declare (indent defun))
   (let ((user-id (car bindings))
         (assistant-id (cadr bindings)))
-    `(when-let (message-number (opencode--current-message-number))
+    `(when-let* ((message-number (opencode--current-message-number)))
        (opencode-api-session-messages (opencode-session-id)
            messages
          (let* ((user-message-index
