@@ -470,7 +470,11 @@ Isolate conventional code-block fontification from session properties."
               hs-set-up-overlay
               (lambda (ov)
                 (overlay-put ov 'modification-hooks nil)
-                (overlay-put ov 'display (concat " " (overlay-get ov 'display))))
+                ;; redisplay skips a `display' string after invisible
+                ;; text, like markup hidden at the end of the first line
+                (overlay-put ov 'before-string
+                             (concat " " (overlay-get ov 'display)))
+                (overlay-put ov 'display nil))
               hs-display-lines-hidden t)
   (hs-minor-mode)
   ;; Evil picks a buffer's initial state from its minor modes before its

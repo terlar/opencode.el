@@ -108,12 +108,12 @@ BODY is evaluated inside `(let-alist tool-args ...)'."
                     " ")
                   arg))
       ;; Multiple arguments: tool-name, then arg-name: value per line
-      (concat tool " ["
+      (concat tool " ("
               (mapconcat (lambda (pair)
                            (format "%s=%s" (car pair) (cdr pair)))
                          input
                          ", ")
-              "]"))))
+              ")"))))
 
 (defun opencode--format-todos (todos)
   "Return TODOS as a markdown todo list."
