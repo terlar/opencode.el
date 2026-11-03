@@ -62,7 +62,10 @@
                        "json")))
             (when .state.output
               (concat "Output:\n\n"
-                      (opencode--fenced-block .state.output "text")))))
+                      (opencode--fenced-block .state.output "text")))
+            (when .state.error
+              (concat "Error:\n\n"
+                      (opencode--fenced-block .state.error "text")))))
      "\n\n")))
 
 (defun opencode--conversation-format-file-part (part)
