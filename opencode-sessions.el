@@ -24,6 +24,16 @@
 (require 'vtable)
 (require 'yank-media)
 
+(defcustom opencode-shown-outputs '(bash-non-zero edit apply_patch)
+  "Outputs in session buffers to show unfolded when first displayed.
+A list of symbols: `reasoning', a tool name like `bash' or `grep', or
+`bash-non-zero' to show bash output only if the command failed.
+Shown outputs can still be folded manually with `hs-toggle-hiding'."
+  :type '(repeat (choice (const reasoning)
+                         (const bash-non-zero)
+                         (symbol :tag "Tool name")))
+  :group 'opencode)
+
 (defvar opencode-session-control-mode-map
   (define-keymap
     "r" 'opencode-sessions-redisplay
@@ -493,15 +503,16 @@ Folds don't nest, so this is the nearest block start before point."
               ((>= (get-text-property start 'opencode-fold) (point))))
     (goto-char start)))
 
-(defun opencode--fold (beg &optional end)
-  "Fold the output from BEG to END, except its first line.
-END defaults to the process marker."
+(defun opencode--fold (beg &optional end shown)
+  "Make the output from BEG to END foldable, except its first line.
+END defaults to the process marker.  Fold it now unless SHOWN is non-nil."
   (with-silent-modifications
     (put-text-property beg (1+ beg) 'opencode-fold
                        (copy-marker (opencode--output-content-end end))))
-  (save-excursion
-    (goto-char beg)
-    (hs-hide-block-at-point)))
+  (unless shown
+    (save-excursion
+      (goto-char beg)
+      (hs-hide-block-at-point))))
 
 ;; Markdown hides whole fence lines, including their newline, only in view mode.
 ;; this also allows us to call markdown-ts-table-align-table in the buffer
@@ -1011,7 +1022,8 @@ PART-ID is id of PART"
               (opencode--maybe-insert-block-spacing))
             ;; fold reasoning once the next block starts
             (when opencode--reasoning-start
-              (opencode--fold opencode--reasoning-start)
+              (opencode--fold opencode--reasoning-start nil
+                              (memq 'reasoning opencode-shown-outputs))
               (setq opencode--reasoning-start nil))
             (when (eq current-type 'reasoning)
               (setq opencode--reasoning-start
@@ -1161,13 +1173,24 @@ Return a marker at the end of the call, where its output goes."
       (opencode--maybe-insert-block-spacing)
       (when (member tool '("edit" "apply_patch"))
         (opencode--refine-diff-hunks start)
-        (opencode--fold start)))))
+        (opencode--fold start nil (memq (intern tool) opencode-shown-outputs))))))
+
+(defun opencode--tool-output-shown-p (part)
+  "Return non-nil if the output of the tool call in PART starts unfolded."
+  (let-alist part
+    (or (memq (intern .tool) opencode-shown-outputs)
+        (when (string= .tool "bash")
+          ;; Only a user's shell command has an empty title.
+          (or (equal .state.title "")
+              (and (memq 'bash-non-zero opencode-shown-outputs)
+                   (numberp .state.metadata.exit)
+                   (/= .state.metadata.exit 0)))))))
 
 (defun opencode--maybe-insert-tool-output (part call-end)
   "Insert the output from the completed tool call in PART at CALL-END.
 Parallel tool calls can complete after later output, so it's inserted
-after its call, folded onto the call's last line.  Shell commands run by
-the user aren't folded, and edits show only their diff."
+after its call, foldable onto the call's last line, and folded unless
+`opencode--tool-output-shown-p'.  Edits show only their diff."
   (let-alist part
     (when (and (string= .state.status "completed")
                call-end
@@ -1186,12 +1209,12 @@ the user aren't folded, and edits show only their diff."
           (opencode--add-margin (1+ (opencode--output-content-end call-end))
                                 (1+ (opencode--output-content-end end))
                                 'opencode-tool-margin-highlight)
-          (unless (and (string= .tool "bash") (equal .state.title ""))
-            (opencode--fold (save-excursion
-                              (goto-char (opencode--output-content-end call-end))
-                              (let ((inhibit-field-text-motion t))
-                                (line-beginning-position)))
-                            end))
+          (opencode--fold (save-excursion
+                            (goto-char (opencode--output-content-end call-end))
+                            (let ((inhibit-field-text-motion t))
+                              (line-beginning-position)))
+                          end
+                          (opencode--tool-output-shown-p part))
           (set-marker end nil)))
       (set-marker call-end nil))))
 
@@ -1231,7 +1254,9 @@ the user aren't folded, and edits show only their diff."
                               (opencode--insert-reasoning-block text)))
                            (opencode--output "\n\n")
                            (when (equal .type "reasoning")
-                             (opencode--fold start)))
+                             (opencode--fold
+                              start nil
+                              (memq 'reasoning opencode-shown-outputs))))
                          (setq last-part-type .type))))))))
            (setq opencode-session-tokens
                  (+ .tokens.input .tokens.output .tokens.reasoning

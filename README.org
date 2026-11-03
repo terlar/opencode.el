@@ -275,3 +275,8 @@ fix, and set both =comint-scroll-show-maximum-output= and
   your test suite and report errors back the to the LLM
 - =opencode-session-deleted-functions= is a hook run when a session is deleted
 - =opencode-tool-formatters= can be used to control how tools are displayed
+- =opencode-shown-outputs= lists what to show unfolded: =reasoning=, tool
+names like =bash= or =edit=, or =bash-non-zero= to show bash output only when the
+command failed. Shell commands you run yourself are always shown. Shown outputs
+can still be folded the same way.
+

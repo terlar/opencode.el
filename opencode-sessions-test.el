@@ -292,14 +292,14 @@ for session \"session\" and assistant message \"message\" render here."
     (search-forward text)
     (eq 'hs (get-char-property (pos-eol) 'invisible))))
 
-(defun opencode-session-test--tool (tool status input &optional output title call-id)
-  "Display the TOOL call part with STATUS, INPUT, OUTPUT and TITLE.
+(defun opencode-session-test--tool (tool status input &optional output title call-id exit)
+  "Display the TOOL call part with STATUS, INPUT, OUTPUT, TITLE and EXIT status.
 CALL-ID defaults to TOOL."
   (opencode-session--update-part
    tool `((sessionID . "session") (messageID . "message")
           (tool . ,tool) (callID . ,(or call-id tool))
           (state . ((status . ,status) (input . ,input) (output . ,output)
-                    (title . ,title))))
+                    (title . ,title) (metadata . ((exit . ,exit))))))
    nil "tool"))
 
 (ert-deftest opencode-session-folding-test ()
@@ -373,6 +373,93 @@ CALL-ID defaults to TOOL."
       (goto-char (point-min))
       (hs-toggle-hiding)
       (should (opencode-session-test--folded-p "Thinking")))))
+
+(ert-deftest opencode-session-shown-outputs-test ()
+  "`opencode-shown-outputs' picks what starts unfolded; all of it can be folded."
+  (with-opencode-session-test-buffer
+    (let ((opencode-shown-outputs '(reasoning grep edit))
+          (part '((sessionID . "session") (messageID . "message") (text . "")))
+          (edit '((filePath . "opencode-sessions.el")
+                  (oldString . "old")
+                  (newString . "new")))
+          (patch '((patchText . "*** Update File: a.el\n@@\n-old\n+new"))))
+      (setq opencode--tool-calls-displayed (make-hash-table :test 'equal))
+      (opencode--output "request\n\n")
+      (opencode-session--update-part
+       "reasoning" part "Thinking\nmore thoughts" "reasoning")
+      (opencode-session-test--tool "edit" "running" edit)
+      (opencode-session-test--tool "apply_patch" "running" patch)
+      (opencode-session-test--tool "grep" "running" '((pattern . "foo")))
+      (opencode-session-test--tool "glob" "running" '((pattern . "*.el")))
+      (opencode-session-test--tool "grep" "completed" '((pattern . "foo"))
+                                   "a.el:1\nb.el:2" "foo")
+      (opencode-session-test--tool "glob" "completed" '((pattern . "*.el"))
+                                   "a.el\nb.el" "*.el")
+      (should-not (opencode-session-test--folded-p "Thinking"))
+      (should-not (opencode-session-test--folded-p "edit opencode-sessions.el:"))
+      (should (opencode-session-test--folded-p "apply_patch:"))
+      (should-not (opencode-session-test--folded-p "grep \"foo\""))
+      (should (opencode-session-test--folded-p "glob \"*.el\""))
+      ;; Shown blocks can still be folded, and unfolded again.
+      (dolist (header '("Thinking" "edit opencode-sessions.el:" "grep \"foo\""))
+        (goto-char (point-min))
+        (search-forward header)
+        (hs-toggle-hiding)
+        (should (opencode-session-test--folded-p header))
+        (hs-toggle-hiding)
+        (should-not (opencode-session-test--folded-p header))))))
+
+(ert-deftest opencode-session-shown-outputs-bash-test ()
+  "`bash-non-zero' shows only failed commands, `bash' shows all of them."
+  (with-opencode-session-test-buffer
+    (let ((run (lambda (command output exit &optional title)
+                 (let ((input `((command . ,command))))
+                   (opencode-session-test--tool "bash" "running" input nil nil command)
+                   (opencode-session-test--tool "bash" "completed" input output
+                                                (or title command) command exit)))))
+      (setq opencode--tool-calls-displayed (make-hash-table :test 'equal))
+      (opencode--output "request\n\n")
+      (let ((opencode-shown-outputs '(bash-non-zero)))
+        (funcall run "good" "out1" 0)
+        (funcall run "bad" "out2" 1)
+        (funcall run "killed" "out3" nil)
+        (funcall run "mine" "out4" nil ""))
+      (let ((opencode-shown-outputs '(bash)))
+        (funcall run "good2" "out5" 0))
+      (let ((opencode-shown-outputs nil))
+        (funcall run "bad2" "out6" 1)
+        (funcall run "mine2" "out7" nil ""))
+      ;; Each search stops at the first match, before any later "2" command.
+      (should (opencode-session-test--folded-p "$ good"))
+      (should-not (opencode-session-test--folded-p "$ bad"))
+      (should (opencode-session-test--folded-p "$ killed"))
+      (should-not (opencode-session-test--folded-p "$ mine"))
+      (should-not (opencode-session-test--folded-p "$ good2"))
+      (should (opencode-session-test--folded-p "$ bad2"))
+      (should-not (opencode-session-test--folded-p "$ mine2"))
+      ;; A user's shell command can be folded too.
+      (goto-char (point-min))
+      (search-forward "$ mine")
+      (hs-toggle-hiding)
+      (should (opencode-session-test--folded-p "$ mine")))))
+
+(ert-deftest opencode-session-shown-outputs-replay-test ()
+  "Replayed reasoning follows `opencode-shown-outputs'."
+  (with-opencode-session-test-buffer
+    (let ((replay
+           (lambda (text)
+             (opencode--replay-session-messages
+              `(((info . ((role . "assistant")
+                          (tokens . ((input . 0) (output . 0) (reasoning . 0)
+                                     (cache . ((read . 0) (write . 0)))))))
+                 (parts . (((type . "reasoning")
+                            (text . ,(concat text "\nmore thoughts")))))))))))
+      (let ((opencode-shown-outputs '(reasoning)))
+        (funcall replay "Shown"))
+      (let ((opencode-shown-outputs nil))
+        (funcall replay "Hidden"))
+      (should-not (opencode-session-test--folded-p "Shown"))
+      (should (opencode-session-test--folded-p "Hidden")))))
 
 (ert-deftest opencode-session-tool-output-margin-after-fenced-call-test ()
   "Output's margin covers a fenced call's closing fence, but only once it's there.
