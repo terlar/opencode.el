@@ -1181,7 +1181,10 @@ the user aren't folded, and edits show only their diff."
             (insert "\n" (opencode--fenced-block .state.output "text")))
           (opencode--mark-as-output call-end end)
           (opencode--buttonize-file-references call-end end)
-          (opencode--add-margin call-end (1+ (opencode--output-content-end end))
+          ;; The first visible output line starts at the call's hidden
+          ;; closing fence, so that's where its margin is read from.
+          (opencode--add-margin (1+ (opencode--output-content-end call-end))
+                                (1+ (opencode--output-content-end end))
                                 'opencode-tool-margin-highlight)
           (unless (and (string= .tool "bash") (equal .state.title ""))
             (opencode--fold (save-excursion

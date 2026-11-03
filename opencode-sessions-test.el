@@ -374,6 +374,26 @@ CALL-ID defaults to TOOL."
       (hs-toggle-hiding)
       (should (opencode-session-test--folded-p "Thinking")))))
 
+(ert-deftest opencode-session-tool-output-margin-after-fenced-call-test ()
+  "Output's margin covers a fenced call's closing fence, but only once it's there.
+The first visible output line starts at that hidden fence."
+  (with-opencode-session-test-buffer
+    (let ((input '((expression . "(+ 1 2)")))
+          (fence-margin-p
+           (lambda ()
+             (save-excursion
+               (goto-char (point-min))
+               (search-forward "(+ 1 2)")
+               (search-forward "```")
+               (seq-some (lambda (ov) (overlay-get ov 'line-prefix))
+                         (overlays-at (- (point) 3)))))))
+      (setq opencode--tool-calls-displayed (make-hash-table :test 'equal))
+      (opencode--output "request\n\n")
+      (opencode-session-test--tool "emacs_eval_elisp" "running" input)
+      (should-not (funcall fence-margin-p))
+      (opencode-session-test--tool "emacs_eval_elisp" "completed" input "3")
+      (should (funcall fence-margin-p)))))
+
 (ert-deftest opencode-session-table-alignment-context-test ()
   "Table alignment must not schedule a context mode in the session buffer."
   (with-opencode-session-test-buffer
