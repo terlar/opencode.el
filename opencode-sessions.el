@@ -24,13 +24,15 @@
 (require 'vtable)
 (require 'yank-media)
 
-(defcustom opencode-shown-outputs '(bash-non-zero edit apply_patch)
+(defcustom opencode-shown-outputs '(bash-non-zero error edit apply_patch)
   "Outputs in session buffers to show unfolded when first displayed.
-A list of symbols: `reasoning', a tool name like `bash' or `grep', or
-`bash-non-zero' to show bash output only if the command failed.
+A list of symbols: `reasoning', a tool name like `bash' or `grep',
+`bash-non-zero' to show bash output only if the command failed, or
+`error' to show the error of any tool call that failed.
 Shown outputs can still be folded manually with `hs-toggle-hiding'."
   :type '(repeat (choice (const reasoning)
                          (const bash-non-zero)
+                         (const error)
                          (symbol :tag "Tool name")))
   :group 'opencode)
 
@@ -1179,6 +1181,8 @@ Return a marker at the end of the call, where its output goes."
   "Return non-nil if the output of the tool call in PART starts unfolded."
   (let-alist part
     (or (memq (intern .tool) opencode-shown-outputs)
+        (and (string= .state.status "error")
+             (memq 'error opencode-shown-outputs))
         (when (string= .tool "bash")
           ;; Only a user's shell command has an empty title.
           (or (equal .state.title "")
@@ -1187,35 +1191,49 @@ Return a marker at the end of the call, where its output goes."
                    (/= .state.metadata.exit 0)))))))
 
 (defun opencode--maybe-insert-tool-output (part call-end)
-  "Insert the output from the completed tool call in PART at CALL-END.
+  "Insert the output or error of the finished tool call in PART at CALL-END.
 Parallel tool calls can complete after later output, so it's inserted
 after its call, foldable onto the call's last line, and folded unless
-`opencode--tool-output-shown-p'.  Edits show only their diff."
+`opencode--tool-output-shown-p'.  Edits show only their diff, unless
+they failed.  Errors are highlighted with the `error' face."
   (let-alist part
-    (when (and (string= .state.status "completed")
+    (when (and (member .state.status '("completed" "error"))
                call-end
                (marker-position call-end))
-      (when (and .state.output
-                 (not (member .tool '("edit" "write" "apply_patch" "question"))))
-        (let ((inhibit-read-only t)
-              (end (copy-marker call-end t)))
-          (save-excursion
-            (goto-char call-end)
-            (insert "\n" (opencode--fenced-block .state.output "text")))
-          (opencode--mark-as-output call-end end)
-          (opencode--buttonize-file-references call-end end)
-          ;; The first visible output line starts at the call's hidden
-          ;; closing fence, so that's where its margin is read from.
-          (opencode--add-margin (1+ (opencode--output-content-end call-end))
-                                (1+ (opencode--output-content-end end))
-                                'opencode-tool-margin-highlight)
-          (opencode--fold (save-excursion
-                            (goto-char (opencode--output-content-end call-end))
-                            (let ((inhibit-field-text-motion t))
-                              (line-beginning-position)))
-                          end
-                          (opencode--tool-output-shown-p part))
-          (set-marker end nil)))
+      (let* ((failed (string= .state.status "error"))
+             (output (if failed
+                         .state.error
+                       (and (not (member .tool '("edit" "write" "apply_patch" "question")))
+                            .state.output))))
+        (when output
+          (let ((inhibit-read-only t)
+                (end (copy-marker call-end t)))
+            (save-excursion
+              (goto-char call-end)
+              (insert "\n" (opencode--fenced-block output "text")))
+            (opencode--mark-as-output call-end end)
+            (opencode--buttonize-file-references call-end end)
+            ;; The first visible output line starts at the call's hidden
+            ;; closing fence, so that's where its margin is read from.
+            (opencode--add-margin (1+ (opencode--output-content-end call-end))
+                                  (1+ (opencode--output-content-end end))
+                                  (if failed 'error 'opencode-tool-margin-highlight))
+            (when failed
+              ;; Font-lock can clear text properties on refontification.
+              (let ((overlay (make-overlay (save-excursion
+                                             (goto-char call-end)
+                                             (forward-line 2)
+                                             (point))
+                                           (opencode--output-content-end end))))
+                (overlay-put overlay 'face 'error)
+                (overlay-put overlay 'evaporate t)))
+            (opencode--fold (save-excursion
+                              (goto-char (opencode--output-content-end call-end))
+                              (let ((inhibit-field-text-motion t))
+                                (line-beginning-position)))
+                            end
+                            (opencode--tool-output-shown-p part))
+            (set-marker end nil))))
       (set-marker call-end nil))))
 
 (defun opencode-open-session-same-window (session)

@@ -294,18 +294,20 @@ for session \"session\" and assistant message \"message\" render here."
 
 (defun opencode-session-test--tool (tool status input &optional output title call-id exit)
   "Display the TOOL call part with STATUS, INPUT, OUTPUT, TITLE and EXIT status.
-CALL-ID defaults to TOOL."
+OUTPUT is the error message when STATUS is \"error\".  CALL-ID defaults to TOOL."
   (opencode-session--update-part
    tool `((sessionID . "session") (messageID . "message")
           (tool . ,tool) (callID . ,(or call-id tool))
-          (state . ((status . ,status) (input . ,input) (output . ,output)
+          (state . ((status . ,status) (input . ,input)
+                    (,(if (equal status "error") 'error 'output) . ,output)
                     (title . ,title) (metadata . ((exit . ,exit))))))
    nil "tool"))
 
 (ert-deftest opencode-session-folding-test ()
   "Fold reasoning, edit diffs and tool output, but not user shell output."
   (with-opencode-session-test-buffer
-    (let ((part '((sessionID . "session") (messageID . "message") (text . "")))
+    (let ((opencode-shown-outputs '(bash-non-zero error))
+          (part '((sessionID . "session") (messageID . "message") (text . "")))
           (edit '((filePath . "opencode-sessions.el")
                   (oldString . "old")
                   (newString . "new")))
@@ -460,6 +462,75 @@ CALL-ID defaults to TOOL."
         (funcall replay "Hidden"))
       (should-not (opencode-session-test--folded-p "Shown"))
       (should (opencode-session-test--folded-p "Hidden")))))
+
+(defun opencode-session-test--error-styled-p (text)
+  "Return non-nil if TEXT has the `error' face and margin, and is visible."
+  (save-excursion
+    (goto-char (point-min))
+    (search-forward text)
+    (let ((pos (match-beginning 0)))
+      (and (eq 'error (get-char-property pos 'face))
+           (not (invisible-p pos))
+           (seq-some (lambda (ov)
+                       (when-let* ((prefix (overlay-get ov 'line-prefix))
+                                   (display (get-text-property 0 'display prefix)))
+                         (eq 'error (get-text-property 0 'face (cadr display)))))
+                     (overlays-at pos))))))
+
+(ert-deftest opencode-session-tool-error-test ()
+  "Failed calls show their error, including tools that normally hide output."
+  (with-opencode-session-test-buffer
+    (let ((opencode-shown-outputs '(error))
+          (eval '((expression . "(car 1)")))
+          (edit '((filePath . "opencode-sessions.el")
+                  (oldString . "old")
+                  (newString . "new"))))
+      (setq opencode--tool-calls-displayed (make-hash-table :test 'equal))
+      (opencode--output "request\n\n")
+      (opencode-session-test--tool "emacs_eval_elisp" "running" eval)
+      (opencode-session-test--tool "edit" "running" edit)
+      (opencode-session-test--tool "emacs_eval_elisp" "error" eval "Wrong type")
+      (opencode-session-test--tool "edit" "error" edit "oldString not found")
+      (should-not (opencode-session-test--folded-p "(car 1)"))
+      (should (opencode-session-test--error-styled-p "Wrong type"))
+      ;; The edit's diff is folded, but its error stays visible below it.
+      (should (opencode-session-test--folded-p "edit opencode-sessions.el:"))
+      (should (opencode-session-test--error-styled-p "oldString not found")))))
+
+(ert-deftest opencode-session-tool-error-folded-test ()
+  "Errors start folded when `error' is not in `opencode-shown-outputs'."
+  (with-opencode-session-test-buffer
+    (let ((opencode-shown-outputs nil)
+          (eval '((expression . "(car 1)"))))
+      (setq opencode--tool-calls-displayed (make-hash-table :test 'equal))
+      (opencode--output "request\n\n")
+      (opencode-session-test--tool "emacs_eval_elisp" "running" eval)
+      (opencode-session-test--tool "emacs_eval_elisp" "error" eval "Wrong type")
+      (should (opencode-session-test--folded-p "(car 1)")))))
+
+(ert-deftest opencode-session-tool-error-replay-test ()
+  "Replayed failed calls show their error."
+  (with-opencode-session-test-buffer
+    (let ((opencode-shown-outputs '(error)))
+      (opencode--replay-session-messages
+       '(((info . ((role . "assistant")
+                   (tokens . ((input . 0) (output . 0) (reasoning . 0)
+                              (cache . ((read . 0) (write . 0)))))))
+          (parts . (((type . "tool")
+                     (tool . "emacs_eval_elisp")
+                     (state . ((status . "error")
+                               (input . ((expression . "(car 1)")))
+                               (error . "Wrong type")))))))))
+      (should-not (opencode-session-test--folded-p "(car 1)"))
+      (should (opencode-session-test--error-styled-p "Wrong type")))))
+
+(ert-deftest opencode-conversation-tool-error-test ()
+  "Exported conversations include the error of failed tool calls."
+  (should (string-search
+           "Error:\n\n```text\nWrong type\n```"
+           (opencode--conversation-format-tool-part
+            '((tool . "emacs_eval_elisp")
+              (state . ((status . "error") (error . "Wrong type"))))))))
 
 (ert-deftest opencode-session-tool-output-margin-after-fenced-call-test ()
   "Output's margin covers a fenced call's closing fence, but only once it's there.
