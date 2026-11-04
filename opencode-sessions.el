@@ -1195,6 +1195,10 @@ Return a marker at the end of the call, where its output goes."
         (and (memq 'bash-non-zero opencode-shown-outputs)
              (opencode--bash-non-zero-p part)))))
 
+(defconst opencode--ignore-output-for-tools '("edit" "write" "apply_patch"
+                                             "question" "todowrite")
+  "Don't show the output for these tools.")
+
 (defun opencode--maybe-insert-tool-output (part call-end)
   "Insert the output or error of the finished tool call in PART at CALL-END.
 Parallel tool calls can complete after later output, so it's inserted
@@ -1209,7 +1213,7 @@ non-zero status are highlighted with the `error' face."
       (let* ((failed (string= .state.status "error"))
              (output (if failed
                          .state.error
-                       (and (not (member .tool '("edit" "write" "apply_patch" "question")))
+                       (and (not (member .tool opencode--ignore-output-for-tools))
                             .state.output)))
              (errorp (or failed (opencode--bash-non-zero-p part))))
         (when output
