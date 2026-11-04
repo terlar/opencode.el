@@ -433,7 +433,13 @@ Isolate conventional code-block fontification from session properties."
                  (if (memq mode markdown-ts-code-block-force-conventional-modes)
                      (funcall collect mode beg finish)
                    (opencode--fontify-code-block mode beg finish)))))
-      (treesit-font-lock-fontify-region start end loudly))))
+      (treesit-font-lock-fontify-region start end loudly)))
+  ;; An overlay's background would hide the line backgrounds of diff faces.
+  ;; Fontifying just a fence line resets its block's overlay, so look past it.
+  (dolist (overlay (overlays-in (save-excursion (goto-char start) (pos-bol 0))
+                                (save-excursion (goto-char end) (pos-bol 3))))
+    (when (eq (overlay-get overlay 'markdown-ts-code-block-mode) 'diff-mode)
+      (overlay-put overlay 'face nil))))
 
 (defvar evil-buffer-regexps)
 
@@ -1196,7 +1202,7 @@ Return a marker at the end of the call, where its output goes."
              (opencode--bash-non-zero-p part)))))
 
 (defconst opencode--ignore-output-for-tools '("edit" "write" "apply_patch"
-                                             "question" "todowrite")
+                                              "question" "todowrite")
   "Don't show the output for these tools.")
 
 (defun opencode--maybe-insert-tool-output (part call-end)

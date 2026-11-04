@@ -182,6 +182,32 @@ for session \"session\" and assistant message \"message\" render here."
         (while (search-forward "@@ -0 +0 @@" nil t)
           (should (get-char-property (- (point) 11) 'invisible)))))))
 
+(ert-deftest opencode-session-diff-line-background-test ()
+  "Show diff faces' backgrounds, keeping the code block background elsewhere."
+  (with-opencode-session-test-buffer
+    (opencode--output "```diff\n-old\n+new\n```\n\n```python\nx = 1\n```\n\n")
+    (font-lock-ensure)
+    (font-lock-flush)
+    (font-lock-ensure)
+    (cl-flet ((check-diff-faces ()
+                (dolist (change '(("old" . diff-removed)
+                                  ("new" . diff-added)))
+                  (goto-char (point-min))
+                  (search-forward (car change))
+                  (let ((face (get-char-property (1- (point)) 'face)))
+                    (should (memq (cdr change) (ensure-list face)))))))
+      (check-diff-faces)
+      ;; A chunk with only a fence line resets the overlay it doesn't touch.
+      (dolist (fence '("```diff" "+new\n```"))
+        (goto-char (point-min))
+        (search-forward fence)
+        (opencode--fontify-markdown (pos-bol) (pos-eol))
+        (check-diff-faces)))
+    (goto-char (point-min))
+    (search-forward "x = 1")
+    (should (eq 'markdown-ts-code-block-markup-hidden
+                (get-char-property (1- (point)) 'face)))))
+
 (ert-deftest opencode-session-hidden-fence-lines-test ()
   "Hide whole fence lines, including their newlines."
   (with-opencode-session-test-buffer
