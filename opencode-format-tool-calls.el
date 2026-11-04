@@ -39,27 +39,27 @@ BODY is evaluated inside `(let-alist tool-args ...)'."
                ,@body)))))
 
 (opencode-define-tool-formatter "edit"
-  (concat "edit " .filePath ":\n"
+  (concat "✏ edit " .filePath ":\n"
           (opencode--fenced-block
            (opencode--format-edit-diff .oldString .newString) "diff")))
 
 (opencode-define-tool-formatter "apply_patch"
-  (concat "apply_patch:\n"
+  (concat "✏ apply_patch:\n"
           (opencode--fenced-block
            (opencode--format-apply-patch .patchText) "diff")))
 
 (opencode-define-tool-formatter "write"
-  (format "write %s" .filePath))
+  (format "📝 write %s" .filePath))
 
 (opencode-define-tool-formatter "read"
   (if (and .offset .limit)
-      (format "read `%s:%d` limit=%d"
+      (format "📖 read `%s:%d` limit=%d"
               .filePath .offset .limit)
     (format "read %s" .filePath)))
 
 (opencode-define-tool-formatter "grep"
   (concat
-   (format "grep \"%s\"" .pattern)
+   (format "🔍 grep \"%s\"" .pattern)
    (when (or .include .path)
      (format " in %s" (or .include .path)))))
 
@@ -69,17 +69,17 @@ BODY is evaluated inside `(let-alist tool-args ...)'."
           (format "$ %s" .command)))
 
 (opencode-define-tool-formatter "websearch"
-  (format "websearch \"%s\"" .query))
+  (format "🌐 websearch \"%s\"" .query))
 
 (opencode-define-tool-formatter "call_omo_agent"
-  (format "call_omo_agent: %s\n\n%s" .description .prompt))
+  (format "🤖 call_omo_agent: %s\n\n%s" .description .prompt))
 
 (opencode-define-tool-formatter "glob"
   (if .path
-      (format "glob \"%s\" in %s"
+      (format "🔍 glob \"%s\" in %s"
               .pattern
               (opencode--relative-path-for-display .path))
-    (format "glob \"%s\"" .pattern)))
+    (format "🔍 glob \"%s\"" .pattern)))
 
 (opencode-define-tool-formatter "todowrite"
   (opencode--format-todos .todos))
