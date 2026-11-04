@@ -10,13 +10,13 @@ of advantages over the official TUI:
    Emacs is a mature TUI and GUI framework, that while janky in its own way, is
    far less janky than the TUIs the new agentic coding tools have written from
    scratch. This package builds on a solid foundation of [[https://www.emacswiki.org/emacs/ComintMode][comint]], [[https://www.gnu.org/software/emacs/manual/html_mono/vtable.html][vtable]],
-   [[https://www.gnu.org/software/emacs/manual/html_node/emacs/Diff-Mode.html][diff-mode]], =markdown-ts-mode=, emacs' completion system, and more, to offer a
-   (IMO) nicer UI. Also if you're an emacs user, the UI is more consistent: goto
-   next or previous prompt, =comint-kill-output-to-kill-ring=, and everything else
-   works the same as in any other repl or shell based on comint mode, completion
-   and filtering works the same as everywhere else in emacs, and everything is
-   just a text buffer where all your usual editing and other commands work as
-   expected.
+   [[https://www.gnu.org/software/emacs/manual/html_node/emacs/Diff-Mode.html][diff-mode]], [[https://www.gnu.org/software/emacs/manual/html_node/emacs/Hideshow.html][hideshow]], =markdown-ts-mode=, emacs' completion system, and more, to
+   offer a (IMO) nicer UI. Also if you're an emacs user, the UI is more
+   consistent: goto next or previous prompt, =comint-kill-output-to-kill-ring=,
+   and everything else works the same as in any other repl or shell based on
+   comint mode, completion and filtering works the same as everywhere else in
+   emacs, and everything is just a text buffer where all your usual editing and
+   other commands work as expected.
    #+end_verse
 
 2) Emacs integration
