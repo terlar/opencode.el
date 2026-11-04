@@ -1177,25 +1177,31 @@ Return a marker at the end of the call, where its output goes."
         (opencode--refine-diff-hunks start)
         (opencode--fold start nil (memq (intern tool) opencode-shown-outputs))))))
 
+(defun opencode--bash-non-zero-p (part)
+  "Return non-nil if PART is a bash call that exited with a non-zero status."
+  (let-alist part
+    (and (string= .tool "bash")
+         (numberp .state.metadata.exit)
+         (/= .state.metadata.exit 0))))
+
 (defun opencode--tool-output-shown-p (part)
   "Return non-nil if the output of the tool call in PART starts unfolded."
   (let-alist part
     (or (memq (intern .tool) opencode-shown-outputs)
         (and (string= .state.status "error")
              (memq 'error opencode-shown-outputs))
-        (when (string= .tool "bash")
-          ;; Only a user's shell command has an empty title.
-          (or (equal .state.title "")
-              (and (memq 'bash-non-zero opencode-shown-outputs)
-                   (numberp .state.metadata.exit)
-                   (/= .state.metadata.exit 0)))))))
+        ;; Only a user's shell command has an empty title.
+        (and (string= .tool "bash") (equal .state.title ""))
+        (and (memq 'bash-non-zero opencode-shown-outputs)
+             (opencode--bash-non-zero-p part)))))
 
 (defun opencode--maybe-insert-tool-output (part call-end)
   "Insert the output or error of the finished tool call in PART at CALL-END.
 Parallel tool calls can complete after later output, so it's inserted
 after its call, foldable onto the call's last line, and folded unless
 `opencode--tool-output-shown-p'.  Edits show only their diff, unless
-they failed.  Errors are highlighted with the `error' face."
+they failed.  Errors and the output of bash commands that exited with a
+non-zero status are highlighted with the `error' face."
   (let-alist part
     (when (and (member .state.status '("completed" "error"))
                call-end
@@ -1204,7 +1210,8 @@ they failed.  Errors are highlighted with the `error' face."
              (output (if failed
                          .state.error
                        (and (not (member .tool '("edit" "write" "apply_patch" "question")))
-                            .state.output))))
+                            .state.output)))
+             (errorp (or failed (opencode--bash-non-zero-p part))))
         (when output
           (let ((inhibit-read-only t)
                 (end (copy-marker call-end t)))
@@ -1217,8 +1224,8 @@ they failed.  Errors are highlighted with the `error' face."
             ;; closing fence, so that's where its margin is read from.
             (opencode--add-margin (1+ (opencode--output-content-end call-end))
                                   (1+ (opencode--output-content-end end))
-                                  (if failed 'error 'opencode-tool-margin-highlight))
-            (when failed
+                                  (if errorp 'error 'opencode-tool-margin-highlight))
+            (when errorp
               ;; Font-lock can clear text properties on refontification.
               (let ((overlay (make-overlay (save-excursion
                                              (goto-char call-end)

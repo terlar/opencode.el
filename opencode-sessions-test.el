@@ -439,6 +439,10 @@ OUTPUT is the error message when STATUS is \"error\".  CALL-ID defaults to TOOL.
       (should-not (opencode-session-test--folded-p "$ good2"))
       (should (opencode-session-test--folded-p "$ bad2"))
       (should-not (opencode-session-test--folded-p "$ mine2"))
+      ;; Only non-zero exits are styled as errors.
+      (should (opencode-session-test--error-styled-p "out2"))
+      (should-not (opencode-session-test--error-styled-p "out4"))
+      (should-not (opencode-session-test--error-styled-p "out5"))
       ;; A user's shell command can be folded too.
       (goto-char (point-min))
       (search-forward "$ mine")
