@@ -121,6 +121,9 @@ Shown outputs can still be folded manually with `hs-toggle-hiding'."
   "List of agents for the current session.
 Buffer local so we can configure models and variants per agent per session.")
 
+(defvar-local opencode--server-agent nil
+  "Id of the agent the server has selected for this buffer's session.")
+
 (defvar-local opencode-session-pending-questions nil
   "Pending questions for this session buffer, awaiting user response.
 When non-nil, contains a cons cell (QUESTION-ID . QUESTIONS-VECTOR).")
@@ -601,12 +604,23 @@ in webchat."
                         comint-last-input-end
                         'opencode-request-margin-highlight))
 
-(defun opencode--mimetype (file)
-  "Return guess of mimetype for FILE."
-  (pcase (file-name-extension file)
-    ((or "org" "ts" (pred null)) "text/plain")
-    (ext (or (mailcap-extension-to-mime ext)
-             "text/plain"))))
+(defun opencode--attachable-file-p (file)
+  "Return non-nil if the model can be sent FILE.
+The server silently drops all but directories, text, PDFs and some images."
+  (or (file-directory-p file)
+      (let ((bytes (with-temp-buffer
+                     (set-buffer-multibyte nil)
+                     (insert-file-contents-literally file nil 0 (* 1024 1024))
+                     (buffer-string))))
+        (or (string-match-p "\\`\\(?:\x89PNG\\|\xff\xd8\xff\\|GIF8\\|BM\\|%PDF-\\|RIFF[^z-a]\\{4\\}WEBP\\)"
+                            bytes)
+            (and (not (string-search "\0" bytes))
+                 (not (memq 'eight-bit
+                            (find-charset-string
+                             (decode-coding-string
+                              ;; the size limit can cut the last character in half
+                              (replace-regexp-in-string "[\xc0-\xff][\x80-\xbf]*\\'" "" bytes)
+                              'utf-8 t)))))))))
 
 (defun opencode--insert-label (name part)
   "Insert a label showing NAME that sends PART with the prompt.
@@ -646,17 +660,28 @@ PARTS are those of the labels in the input, which TEXT shows as code."
           ;; a label yanked twice shares its part
           (delete-dups (nreverse parts)))))
 
-(defun opencode--add-file-to-context (file &optional mime display-name)
-  "Add FILE to context with optional MIME and DISPLAY-NAME."
-  (let* ((display-name (or display-name
-                           (opencode--relative-path-for-display file)))
-         (mime (or mime (opencode--mimetype file)))
-         (url (concat "file://" file)))
+(defun opencode--file-attachment (file name)
+  "Return a label part attaching FILE as NAME."
+  `(files . ((uri . ,(concat "file://"
+                             (url-hexify-string (expand-file-name file)
+                                                url-path-allowed-chars)))
+             (name . ,name))))
+
+(defun opencode--text-attachment (text name)
+  "Return a label part attaching TEXT as NAME."
+  `(files . ((uri . ,(concat "data:text/plain;base64,"
+                             (base64-encode-string
+                              (encode-coding-string text 'utf-8) t)))
+             (name . ,name))))
+
+(defun opencode--add-file-to-context (file &optional display-name)
+  "Add FILE to context with optional DISPLAY-NAME."
+  (unless (opencode--attachable-file-p file)
+    (user-error "Can't attach %s: unsupported file type" file))
+  (let ((display-name (or display-name
+                          (opencode--relative-path-for-display file))))
     (opencode--insert-label display-name
-                            `((type . file)
-                              (filename . ,display-name)
-                              (mime . ,mime)
-                              (url . ,url)))
+                            (opencode--file-attachment file display-name))
     (insert " ")))
 
 (defun opencode--image-extension (mime)
@@ -677,7 +702,7 @@ PARTS are those of the labels in the input, which TEXT shows as code."
           (let ((coding-system-for-write 'no-conversion))
             (write-region data nil file nil 'silent))
           (push file opencode--temp-files)
-          (opencode--add-file-to-context file mime (file-name-nondirectory file)))
+          (opencode--add-file-to-context file (file-name-nondirectory file)))
       (error
        (ignore-errors (delete-file file))
        (signal (car error) (cdr error))))))
@@ -751,13 +776,11 @@ Otherwise prompt for file in current project."
     (with-last-opencode-session
      (opencode--insert-label
       buffer
-      `((type . text)
-        (text . ,(concat
-                  (format "<buffer name=\"%s\">" buffer)
-                  (with-current-buffer buffer
-                    (buffer-substring-no-properties (point-min) (point-max)))
-                  "</buffer>"))
-        (synthetic . t))))))
+      (opencode--text-attachment
+       (with-current-buffer buffer
+         (buffer-substring-no-properties (point-min) (point-max)))
+       buffer))
+     (insert " "))))
 
 (defun opencode-add-region ()
   "Add the active region to context."
@@ -766,12 +789,10 @@ Otherwise prompt for file in current project."
       (let ((region (buffer-substring-no-properties (region-beginning)
                                                     (region-end))))
         (with-last-opencode-session
-         (opencode--insert-label
-          (format "region: %s"
-                  (truncate-string-to-width region 24 0 nil (truncate-string-ellipsis)))
-          `((type . text)
-            (text . ,(concat "<region>" region "</region>"))
-            (synthetic . t)))
+         (let ((name (format "region: %s"
+                             (truncate-string-to-width
+                              region 24 0 nil (truncate-string-ellipsis)))))
+           (opencode--insert-label name (opencode--text-attachment region name)))
          (insert " ")))
     (user-error "No active region")))
 
@@ -792,8 +813,50 @@ Otherwise prompt for file in current project."
                                       (list .name .name .description))))))
         (delete-char -1)
         (opencode--insert-label (concat "@" name)
-                                `((type . "agent")
-                                  (name . ,name)))))))
+                                `(agents . ((name . ,name))))))))
+
+(defun opencode--adopt-selection (agent model)
+  "Make the local agent and model AGENT and MODEL, if non-nil."
+  (when (and agent (not (equal agent (alist-get 'id opencode-session-agent))))
+    (setq opencode-session-agent
+          (or (seq-find (lambda (candidate)
+                          (equal agent (alist-get 'id candidate)))
+                        opencode-session-agents)
+              ;; a hidden agent
+              `((id . ,agent) (name . ,agent)))))
+  (when model
+    (setf (alist-get 'model opencode-session-agent) (copy-alist model)))
+  (force-mode-line-update))
+
+(defun opencode--send-failed (error-msg)
+  "Display ERROR-MSG of input that wasn't accepted, and go back to a prompt.
+No events will follow to do so."
+  (opencode--insert-error error-msg)
+  (opencode--show-prompt))
+
+(defun opencode--sync-agent-and-model (callback)
+  "Make the server select the local agent and model, then run CALLBACK.
+The server ignores a switch to the same model, but a switch of agent always
+records a message, so that's only done if it differs."
+  (let ((agent (alist-get 'id opencode-session-agent))
+        (model (alist-get 'model opencode-session-agent)))
+    (cl-flet ((sync-model ()
+                (if model
+                    (opencode-api--request
+                     'post (format "/api/session/%s/model" opencode-session-id)
+                     :body `((model . ,model))
+                     :then (lambda (_response) (funcall callback))
+                     :else #'opencode--send-failed)
+                  (funcall callback))))
+      (if (or (null agent) (equal agent opencode--server-agent))
+          (sync-model)
+        (opencode-api--request
+         'post (format "/api/session/%s/agent" opencode-session-id)
+         :body `((agent . ,agent))
+         :then (lambda (_response)
+                 (setq opencode--server-agent agent)
+                 (sync-model))
+         :else #'opencode--send-failed)))))
 
 (defun opencode--unless-session-active (session-id function)
   "Call FUNCTION unless the server is still running SESSION-ID."
@@ -801,6 +864,16 @@ Otherwise prompt for file in current project."
     active
     (unless (assq (intern session-id) active)
       (funcall function))))
+
+(defun opencode--prompt-body (text parts)
+  "Return the body of a prompt with TEXT and the label PARTS."
+  (let ((files (cl-loop for (kind . part) in parts
+                        when (eq kind 'files) collect part))
+        (agents (cl-loop for (kind . part) in parts
+                         when (eq kind 'agents) collect part)))
+    `((text . ,text)
+      ,@(when files `((files . ,(vconcat files))))
+      ,@(when agents `((agents . ,(vconcat agents)))))))
 
 (defun opencode--send-input (_proc string)
   "Send STRING as input to current opencode session."
@@ -811,39 +884,44 @@ Otherwise prompt for file in current project."
                (opencode--input-text-and-parts
                 comint-last-input-start
                 (+ comint-last-input-start (length string))))
-              (temp-files opencode--temp-files)
-              (sent-message nil))
+              (temp-files opencode--temp-files))
     (setf opencode--temp-files nil)
-    (let-alist opencode-session-agent
-      (cond
-       ((string-prefix-p "/" string)
-        (let ((space-pos (seq-position string ?\s)))
-          (opencode-api-execute-command (opencode-session-id)
-              `((agent . ,.name)
-                (model . ,(concat .model.providerID "/" .model.modelID))
-                (command . ,(substring string 1 space-pos))
-                (arguments . ,(if space-pos
-                                  (substring string (1+ space-pos))
-                                "")))
-              _response)))
-       ((string-prefix-p "!" string)
-        (opencode-api-execute-shell (opencode-session-id)
-            `((agent . ,.name)
-              (command . ,(substring string 1)))
-            _response))
-       (t
-        (setq sent-message t)
-        (opencode-api-send-message (opencode-session-id)
-            `((agent . ,.name)
-              ,(assoc 'model opencode-session-agent)
-              ,@(when .variant
-                  `((variant . ,.variant)))
-              (parts ((type . text) (text . ,string))
-                     ,@extra-parts))
-            _result
-          (opencode--delete-temp-files temp-files)))))
-    (unless sent-message
-      (opencode--delete-temp-files temp-files))))
+    (cond
+     ((string-prefix-p "/" string)
+      (let ((space-pos (seq-position string ?\s)))
+        (opencode--sync-agent-and-model
+         (lambda ()
+           (opencode-api--request
+            'post (format "/api/session/%s/command" opencode-session-id)
+            :body `((name . ,(substring string 1 space-pos))
+                    (text . ,(if space-pos
+                                 (substring string (1+ space-pos))
+                               "")))
+            ;; Commands can just run a callback, then no events follow to do so.
+            :then (lambda (_response)
+                    (opencode--unless-session-active
+                     opencode-session-id
+                     (lambda ()
+                       (unless (equal opencode-session-status "busy")
+                         (opencode--show-prompt)))))
+            :else #'opencode--send-failed))))
+      (opencode--delete-temp-files temp-files))
+     ((string-prefix-p "!" string)
+      (opencode-api--request
+       'post (format "/api/session/%s/shell" opencode-session-id)
+       :body `((command . ,(substring string 1)))
+       :else #'opencode--send-failed)
+      (opencode--delete-temp-files temp-files))
+     (t
+      (opencode--sync-agent-and-model
+       (lambda ()
+         (opencode-api--request
+          'post (format "/api/session/%s/prompt" opencode-session-id)
+          :body (opencode--prompt-body string extra-parts)
+          :then (lambda (_result) (opencode--delete-temp-files temp-files))
+          :else (lambda (error-msg)
+                  (opencode--delete-temp-files temp-files)
+                  (opencode--send-failed error-msg)))))))))
 
 (defun opencode-session--send-synthetic-input (string)
   "Send STRING to the current opencode session.

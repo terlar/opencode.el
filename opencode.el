@@ -724,9 +724,11 @@ If INITIAL-PROMPT is given, it is sent after CALLBACK is called."
   (opencode-autoconnect
    (lambda ()
      (opencode--download-slash-commands default-directory)
-     (opencode-api-create-session (if title
-                                      `((title . ,title))
-                                    (make-hash-table))
+     (opencode-api-create-session
+         `((location . ((directory . ,(directory-file-name
+                                       (expand-file-name default-directory)))))
+           ,@(when title
+               `((title . ,title))))
          session
        (opencode-open-session
         session
