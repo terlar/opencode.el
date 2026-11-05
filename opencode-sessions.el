@@ -43,11 +43,13 @@ Shown outputs can still be folded manually with `hs-toggle-hiding'."
     "SPC" nil
     "n" 'opencode-new-session
     "M" 'opencode-toggle-mcp
-    "U" 'opencode-unshare-all-sessions
     "v" 'opencode-session-control-toggle-verbose))
 
 (defvar-local opencode-session-control-verbose nil
   "Toggle whether to display subagents in session control buffer.")
+
+(defvar-local opencode-session-control-project-id nil
+  "Id of the project whose sessions the session control buffer displays.")
 
 (define-derived-mode opencode-session-control-mode special-mode "Sessions"
   "Opencode session control panel mode.")
@@ -77,14 +79,10 @@ Shown outputs can still be folded manually with `hs-toggle-hiding'."
     "C-c p" 'opencode-open-parent
     "C-c f" 'opencode-add-file
     "C-c b" 'opencode-add-buffer-dwim
-    "C-c s" 'opencode-share-session
-    "C-c u" 'opencode-unshare-session
-    "C-c U" 'opencode-unshare-all-sessions
     "C-c m" 'opencode-select-model
     "C-c v" 'opencode-select-variant
     "C-c M" 'opencode-toggle-mcp
     "C-c F" 'opencode-fork-session
-    "C-c D" 'opencode-delete-message
     "C-c R" 'opencode-revert-message
     "/" 'opencode-insert-slash-command
     "@" 'opencode-add-subagent))
@@ -234,13 +232,13 @@ Accepts (\"name\" . buffer) to work as a read-buffer predicate."
   (interactive)
   (opencode-autoconnect
    (lambda ()
-     (opencode-api-sessions sessions
-       (opencode--select-sessions "Session: "
-                                  (seq-remove (lambda (session)
-                                                (alist-get 'parentID session))
-                                              sessions)
-                                  (format "No sessions in %s" default-directory)
-                                  :pop-to-buffer nil)))))
+     (opencode-api-location location
+       (opencode-api-root-sessions-for-project ((map-nested-elt location '(project id)))
+           sessions
+         (opencode--select-sessions "Session: "
+                                    sessions
+                                    (format "No sessions in %s" default-directory)
+                                    :pop-to-buffer nil))))))
 
 (cl-defun opencode--select-sessions (prompt sessions no-sessions-message &key (pop-to-buffer t))
   "Select a session from SESSIONS to open.
@@ -252,7 +250,7 @@ POP-TO-BUFFER controls whether to pop to or switch to the session buffer."
         prompt
         (cl-loop for session in sessions
                  collect (let-alist session
-                           (list .title
+                           (list (opencode--session-title session)
                                  session
                                  (opencode--format-time-ago
                                   (opencode--time-ago
@@ -347,35 +345,6 @@ Each element is (display-name model-ref provider-id)."
     (opencode-api-session ((alist-get 'parentID session))
         parent
       (opencode-open-session parent))))
-
-(defun opencode-share-session (&optional session)
-  "Share SESSION or the current session."
-  (interactive)
-  (opencode-api-share-session ((or (alist-get 'id session)
-                                   opencode-session-id))
-      session
-    (let ((url (map-nested-elt session '(share url))))
-      (gui-select-text url)
-      (message "Copied to clipboard: %s" url))))
-
-(defun opencode-unshare-session (&optional session)
-  "Unshare SESSION or the current session."
-  (interactive)
-  (opencode-api-unshare-session ((or (alist-get 'id session)
-                                     opencode-session-id))
-      _session
-    (message "Session no longer shared")))
-
-(defun opencode-unshare-all-sessions ()
-  "Unshare all sessions across all projects."
-  (interactive)
-  (opencode-api-projects projects
-    (dolist (project projects)
-      (let ((default-directory (alist-get 'worktree project)))
-        (opencode-api-sessions sessions
-          (dolist (session sessions)
-            (when (alist-get 'share session)
-              (opencode-unshare-session session))))))))
 
 (defun opencode-insert-slash-command ()
   "Insert an opencode slash command."
@@ -595,9 +564,7 @@ in webchat."
   (interactive)
   (opencode-api-delete-session ((or (alist-get 'id session)
                                     opencode-session-id))
-      result
-    (unless result
-      (error "Unable to delete session"))
+      _result
     ;; if called from session control buffer, don't kill buffer
     ;; but if called from a session buffer then kill this buffer
     (unless session
@@ -1649,9 +1616,9 @@ Prompts are user messages and shell commands, in order."
   "Abort a busy session and go back to prompt."
   (interactive)
   (setq opencode--skip-files-finished-editing-hook-on-next-idle t)
-  (opencode-api-abort-session (opencode-session-id)
-      success-p
-    (unless success-p
+  (opencode-api-interrupt-session (opencode-session-id)
+      result
+    (when (opencode--json-falsy (alist-get 'interrupted result))
       (setq opencode--skip-files-finished-editing-hook-on-next-idle nil)
       (message "Failed to abort session."))))
 
@@ -1666,11 +1633,9 @@ Prompts are user messages and shell commands, in order."
   "Compact the current session."
   (interactive)
   (if opencode-session-id
-      (opencode-api-summarize (opencode-session-id)
-          (alist-get 'model opencode-session-agent)
-          result
-        (unless result
-          (error "Unable to compact session")))
+      (opencode-api-compact-session (opencode-session-id)
+          (make-hash-table)
+          _result)
     (user-error "Not in an OpenCode session")))
 
 (defun opencode-scroll-to-last-response-start ()
@@ -1683,65 +1648,57 @@ Prompts are user messages and shell commands, in order."
   (backward-word 1)
   (recenter-top-bottom 0))
 
+(defun opencode--session-control-display (sessions)
+  "Display SESSIONS in the current session control buffer."
+  (let ((inhibit-read-only t)
+        (point (point))
+        cache)
+    (erase-buffer)
+    (if sessions
+        (make-vtable
+         :columns '("Title"
+                    (:name "Branch" :min-width 6)
+                    (:name "Last Updated" :width 12
+                     :formatter opencode--format-time-ago
+                     :primary ascend)
+                    (:name "Cost" :width 8 :align right)
+                    (:name "Created at" :width 10
+                     :formatter opencode--format-time-ago))
+         :objects sessions
+         :actions '("x" opencode-kill-session
+                    "R" opencode-rename-session
+                    "RET" opencode-open-session-same-window
+                    "o" opencode-open-session-same-window)
+         :getter (lambda (object column vtable)
+                   (let-alist object
+                     (pcase (vtable-column vtable column)
+                       ("Title" (opencode--session-title object))
+                       ("Branch" (if (and .location.directory
+                                          (file-exists-p .location.directory))
+                                     (let ((default-directory .location.directory))
+                                       (with-memoization
+                                           (map-elt cache .location.directory)
+                                         (or (magit-get-current-branch) "-")))
+                                   "-"))
+                       ("Last Updated" (opencode--time-ago object 'updated))
+                       ("Cost" (format "$%.2f" (or .cost 0)))
+                       ("Created at" (opencode--time-ago object 'created)))))
+         :separator-width 3
+         :keymap opencode-session-control-mode-map)
+      (insert "No sessions in " (or default-directory "unknown directory")))
+    (goto-char point)))
+
 (defun opencode-sessions-redisplay ()
   "Refresh the session display table for DIRECTORY."
   (interactive)
-  (opencode-api-sessions sessions
-    (let ((inhibit-read-only t)
-          (point (point))
-          (sessions (if opencode-session-control-verbose
-                        sessions
-                      (seq-remove (lambda (session)
-                                    (alist-get 'parentID session))
-                                  sessions)))
-          cache)
-      (erase-buffer)
-      (if sessions
-          (make-vtable
-           :columns '("Title"
-                      (:name "Branch" :min-width 6)
-                      (:name "Last Updated" :width 12
-                       :formatter opencode--format-time-ago
-                       :primary ascend)
-                      (:name "Files changed" :width 13 :align right)
-                      (:name "Created at" :width 10
-                       :formatter opencode--format-time-ago))
-           :objects sessions
-           :actions '("x" opencode-kill-session
-                      "R" opencode-rename-session
-                      "s" opencode-share-session
-                      "u" opencode-unshare-session
-                      "RET" opencode-open-session-same-window
-                      "o" opencode-open-session-same-window)
-           :getter (lambda (object column vtable)
-                     (let-alist object
-                       (pcase (vtable-column vtable column)
-                         ("Title" (if .share
-                                      (concat (propertize "shared " 'face
-                                                          '(bold opencode-request-margin-highlight))
-                                              .title)
-                                    .title))
-                         ("Branch" (if (and .directory (file-exists-p .directory))
-                                       (let ((default-directory .directory))
-                                         (with-memoization
-                                             (map-elt cache .directory)
-                                           (magit-get-current-branch)))
-                                     "-"))
-                         ("Last Updated" (opencode--time-ago object 'updated))
-                         ("Files changed" (let-alist .summary
-                                            (if (opencode--json-falsy .files)
-                                                "none"
-                                              (format "%d  +%d-%d"
-                                                      .files
-                                                      (if (opencode--json-falsy .additions)
-                                                          0 .additions)
-                                                      (if (opencode--json-falsy .deletions)
-                                                          0 .deletions)))))
-                         ("Created at" (opencode--time-ago object 'created)))))
-           :separator-width 3
-           :keymap opencode-session-control-mode-map)
-        (insert "No sessions in " (or default-directory "unknown directory")))
-      (goto-char point))))
+  (when opencode-session-control-project-id
+    (if opencode-session-control-verbose
+        (opencode-api-sessions-for-project (opencode-session-control-project-id)
+            sessions
+          (opencode--session-control-display sessions))
+      (opencode-api-root-sessions-for-project (opencode-session-control-project-id)
+          sessions
+        (opencode--session-control-display sessions)))))
 
 (provide 'opencode-sessions)
 ;;; opencode-sessions.el ends here

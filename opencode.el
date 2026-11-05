@@ -190,22 +190,28 @@ Call ON-CONNECT once connected."
   (message "Connected to %s" opencode-api-url))
 
 (defun opencode-open-project (directory)
-  "Open sessions control buffer for DIRECTORY."
+  "Open the session control buffer for the project of DIRECTORY.
+Worktrees of a project share one, and new sessions started from it go in the
+directory it was last opened for."
   (opencode--download-slash-commands directory)
-  (let ((buffer-name (format "*OpenCode Sessions in %s*" directory)))
-    (unless (get-buffer buffer-name)
-      (with-current-buffer (get-buffer-create buffer-name)
-        (opencode-session-control-mode)
-        (setq default-directory directory)
-        (opencode-api-current-project project
-          (let-alist project
-            (setf (map-elt opencode--session-control-buffers .id)
-                  (cons (current-buffer)
-                        (seq-filter #'buffer-live-p
-                                    (map-elt opencode--session-control-buffers
-                                             .id))))))
-        (opencode-sessions-redisplay)))
-    (pop-to-buffer buffer-name)))
+  (let* ((directory (file-name-as-directory directory))
+         (default-directory directory))
+    (opencode-api-location location
+      (let-alist location
+        (with-current-buffer
+            (get-buffer-create
+             (format "*OpenCode Sessions: %s*"
+                     (if (equal .project.id "global")
+                         "global"
+                       (file-name-nondirectory
+                        (directory-file-name .project.canonical)))))
+          (unless (derived-mode-p 'opencode-session-control-mode)
+            (opencode-session-control-mode)
+            (push (current-buffer) opencode--session-control-buffers))
+          (setq default-directory directory
+                opencode-session-control-project-id .project.id)
+          (opencode-sessions-redisplay)
+          (pop-to-buffer (current-buffer)))))))
 
 (defvar opencode-worktree-directory (expand-file-name "~/opencode_worktrees/")
   "Directory to store worktrees created for opencode.")
@@ -230,12 +236,12 @@ Then open an opencode session in it."
         (opencode--annotated-completion
          "Project: "
          (cl-loop for project in projects
-                  for worktree = (alist-get 'worktree project)
-                  when worktree
+                  for canonical = (alist-get 'canonical project)
+                  when canonical
                   collect (list (string-remove-prefix
                                  (expand-file-name "~/")
-                                 worktree)
-                                worktree
+                                 canonical)
+                                canonical
                                 (opencode--format-time-ago
                                  (opencode--time-ago
                                   project 'updated))))))))))
@@ -756,23 +762,27 @@ If INITIAL-PROMPT is given, it is sent after CALLBACK is called."
   "Completing read to select an MCP to toggle."
   (interactive)
   (opencode-api-mcps mcps
-    (let ((mcp (opencode--annotated-completion
-                "MCP: "
-                (cl-loop for mcp in mcps
-                         for (mcp-name . mcp-info) = mcp
-                         collect (list (symbol-name mcp-name)
-                                       mcp-name
-                                       (pcase (alist-get 'status mcp-info)
-                                         ("connected" "🟢 connected")
-                                         ("disabled"  "⚪ disabled")
-                                         ("failed"    "🔴 failed")))))))
-      (pcase (map-nested-elt mcps `(,mcp status))
-        ("connected" (opencode-api-disable-mcp (mcp)
-                         _res
-                       (message "Disabled %s" mcp)))
-        ("disabled" (opencode-api-enable-mcp (mcp)
-                        _res
-                      (message "Enabled %s" mcp)))))))
+    (let* ((name (opencode--annotated-completion
+                  "MCP: "
+                  (cl-loop for mcp in mcps
+                           for name = (alist-get 'name mcp)
+                           collect (list name
+                                         name
+                                         (pcase (map-nested-elt mcp '(status status))
+                                           ("connected"  "🟢 connected")
+                                           ("disabled"   "⚪ disabled")
+                                           ("failed"     "🔴 failed")
+                                           ("needs_auth" "🟡 needs auth")
+                                           ("pending"    "⏳ pending"))))))
+           (mcp (seq-find (lambda (mcp) (equal name (alist-get 'name mcp))) mcps)))
+      (when mcp
+        (if (equal "connected" (map-nested-elt mcp '(status status)))
+            (opencode-api-disable-mcp (name)
+                _res
+              (message "Disabled %s" name))
+          (opencode-api-enable-mcp (name)
+              _res
+            (message "Enabled %s" name)))))))
 
 (defun opencode-fork-session ()
   "Fork the current session from the message at point.
@@ -784,7 +794,7 @@ If point is before the first prompt, creates a new session instead."
   (opencode--current-message-id message-id
     (if message-id
         (opencode-api-fork-session (opencode-session-id)
-            `((messageID . ,message-id))
+            `((before . ,message-id))
             session
           (opencode-open-session-same-window session))
       ;; if before the first prompt just open a new session
@@ -799,40 +809,16 @@ If point is before the first prompt, creates a new session instead."
     (if message-id
         (opencode-api-revert-message (opencode-session-id)
             `((messageID . ,message-id))
-            result
-          (message
-           (if result
-               "Reverted edits after message"
-             "Failed to revert message")))
+            _result
+          (message "Reverted edits after message"))
       (user-error "No user message at point"))))
-
-(defun opencode-delete-message ()
-  "Delete the message at point from the current session."
-  (interactive)
-  (unless opencode-session-id
-    (user-error "Not in an opencode session buffer"))
-  (opencode--current-message-exchange (user-id assistant-id)
-    (if (and user-id assistant-id)
-        (opencode-api-delete-message (opencode-session-id assistant-id)
-            assistant-result
-          (unless assistant-result
-            (error "Failed to delete assistant message"))
-          (opencode-api-delete-message (opencode-session-id user-id)
-              user-result
-            (unless user-result
-              (error "Failed to delete user message"))
-            (opencode--delete-message-at-point)))
-      (user-error "No message with assistant response at point"))))
 
 (defun opencode-unrevert-all ()
   "Unrevert all reverted messages in the current session."
   (interactive)
   (opencode-api-unrevert-all (opencode-session-id)
-      result
-    (message
-     (if result
-         "Restored all edits in session"
-       "Failed to restore edits"))))
+      _result
+    (message "Restored all edits in session")))
 
 (defun opencode--download-slash-commands (directory)
   "Download slash commands for DIRECTORY."
