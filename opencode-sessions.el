@@ -1522,34 +1522,6 @@ If CALLBACK is given, it will be called with SESSION afterwards."
         (when callback
           (funcall callback session))))))
 
-(defun opencode--rebuild-session ()
-  "Display the current session buffer again from the server, keeping unsent input.
-Events it missed while not connected are lost, so it may be out of date."
-  (opencode-api-session (opencode-session-id)
-      session
-    (let* ((inhibit-read-only t)
-           (process (get-buffer-process (current-buffer)))
-           (input (buffer-substring (process-mark process) (point-max))))
-      (setq opencode--table-scan-marker nil
-            opencode--reasoning-start nil
-            opencode--current-block nil
-            opencode--blocks-with-output nil
-            opencode-last-response-start nil
-            opencode-session-pending-permission nil
-            opencode-session-pending-questions nil
-            opencode-session-tokens 0
-            comint-last-prompt nil
-            comint-input-ring (make-ring comint-input-ring-size))
-      (remove-overlays)
-      (erase-buffer)
-      (set-marker (process-mark process) (point-min))
-      (opencode-insert-logo)
-      (opencode--load-session
-       session
-       (lambda (_session)
-         (goto-char (point-max))
-         (insert input))))))
-
 (cl-defun opencode-open-session (session &key (pop-to-buffer t) callback)
   "Open comint based shell for SESSION.
 POP-TO-BUFFER controls whether to pop to or switch to the session buffer.

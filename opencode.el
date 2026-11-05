@@ -552,7 +552,7 @@ Also prompts for pending questions or permissions if any."
                              .assistantMessageID .ordinal))
             (tool-key (opencode--tool-key .assistantMessageID .id)))
         (cl-case type
-          (server.connected (opencode--stream-connected))
+          (server.connected nil)
           (tui.toast.show (opencode--toast-show data))
           (session.execution.started
            (opencode-session--set-status .sessionID "busy"))
@@ -677,12 +677,6 @@ Also prompts for pending questions or permissions if any."
            (opencode--log-event "WARNING EVENT HANDLER"
                                 (format "%S failed: %s" data (error-message-string err)))))))))
 
-(defvar opencode--stream-retries-left nil
-  "Number of attempts left to resubscribe, or nil if the stream isn't recovering.")
-
-(defvar opencode--stream-retry-timer nil
-  "Timer for the next attempt to resubscribe.")
-
 (defun opencode--subscribe-events ()
   "Subscribe to the opencode event stream."
   (let* (stream
@@ -707,41 +701,19 @@ Also prompts for pending questions or permissions if any."
     (set-process-query-on-exit-flag stream nil)))
 
 (defun opencode--stream-ended (event)
-  "Try to recover from the event stream ending with EVENT.
-The server may still be fine, so it's left running."
-  (opencode--log-event "STREAM ENDED" event)
-  ;; A failed stream reports it more than once
-  (unless (memq opencode--stream-retry-timer timer-list)
-    (when (process-live-p opencode--event-subscription)
-      (delete-process opencode--event-subscription))
-    (setq opencode--stream-retries-left (or opencode--stream-retries-left 5))
-    (if (zerop opencode--stream-retries-left)
-        (progn
-          (opencode-disconnect "resubscribing failed")
-          (message "Lost connection to opencode at %s" opencode-api-url))
-      (cl-decf opencode--stream-retries-left)
-      (setq opencode--stream-retry-timer
-            (run-at-time 2 nil #'opencode--subscribe-events)))))
-
-(defun opencode--stream-connected ()
-  "Handle the event stream connecting, rebuilding what it missed if recovering."
-  (when opencode--stream-retries-left
-    (setq opencode--stream-retries-left nil)
-    (message "Reconnected to opencode at %s" opencode-api-url)
-    (clrhash opencode--tool-calls)
-    (opencode--redisplay-session-control-buffers)
-    (maphash (lambda (_session-id buffer)
-               (when (buffer-live-p buffer)
-                 (with-current-buffer buffer
-                   (opencode--rebuild-session))))
-             opencode-session-buffers)))
+  "Disconnect after the event stream ends with EVENT."
+  (opencode-disconnect event)
+  (display-warning
+   'opencode
+   (format "Lost connection to opencode at %s, reconnect with M-x opencode"
+           opencode-api-url)
+   :error))
 
 (defun opencode-disconnect (&optional event)
   "Disconnect from opencode server, optionally log EVENT."
   (interactive)
   (opencode--log-event "DISCONNECT" event)
-  (when (timerp opencode--stream-retry-timer)
-    (cancel-timer opencode--stream-retry-timer))
+  ;; Cleared first so the stream's further reports of ending are ignored
   (let ((stream opencode--event-subscription))
     (setq opencode--event-subscription nil)
     (when (process-live-p stream)
@@ -749,9 +721,7 @@ The server may still be fine, so it's left running."
   (when (process-live-p opencode--process)
     (set-process-sentinel opencode--process nil)
     (kill-process opencode--process))
-  (setq opencode--stream-retries-left nil
-        opencode--stream-retry-timer nil
-        opencode--slash-commands-by-directory nil
+  (setq opencode--slash-commands-by-directory nil
         opencode--location-by-directory nil))
 
 (defun opencode--fetch-models (callback)
