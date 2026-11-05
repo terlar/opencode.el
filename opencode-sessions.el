@@ -1565,6 +1565,44 @@ If CALLBACK is given, it will be called with the session after it is initialized
                 (pop-to-buffer buffer)
               (switch-to-buffer buffer))))))))
 
+(defun opencode--reload-session ()
+  "Redisplay the current session from the server, keeping any typed input.
+It keeps its properties, which hold the parts of its labels."
+  (let ((input (buffer-substring (opencode--session-process-position)
+                                 (point-max))))
+    (let ((inhibit-read-only t))
+      (remove-overlays)
+      (erase-buffer))
+    (setq opencode--current-block nil)
+    (opencode-insert-logo)
+    (opencode-api-session (opencode-session-id)
+        session
+      (opencode--load-session
+       session
+       (lambda (_session)
+         (when (equal opencode-session-status "idle")
+           (goto-char (point-max))
+           (insert input)))))))
+
+(defun opencode--prompt-start ()
+  "Return the start of the line of the prompt before point."
+  (save-excursion
+    (end-of-line)
+    (comint-previous-prompt 1)
+    (let ((inhibit-field-text-motion t))
+      (line-beginning-position))))
+
+(defun opencode--truncate-to-prompt (start text)
+  "Delete from START to the end of the buffer, then prompt with TEXT as input."
+  (let ((inhibit-read-only t))
+    (remove-overlays start (point-max))
+    (delete-region start (point-max)))
+  (set-marker (process-mark (get-buffer-process (current-buffer))) start)
+  (setq opencode--current-block nil)
+  (opencode--show-prompt)
+  (goto-char (point-max))
+  (insert text))
+
 (defun opencode--current-message-number ()
   "Return the 0-indexed message number at point.
 Counts prompts from the beginning of the buffer to the current position.
@@ -1578,22 +1616,27 @@ Returns nil if point is before the first prompt."
                while (< (point) target-point)
                count t))))
 
-(defmacro opencode--current-message-id (result &rest body)
-  "Run BODY with RESULT as the message id of the user message at point.
+(defmacro opencode--current-user-message (result &rest body)
+  "Run BODY with RESULT as the user message at point, nil before the first.
 Prompts are user messages and shell commands, in order."
   (declare (indent defun))
-  `(when-let* ((message-number (opencode--current-message-number)))
-     (opencode-api-all-messages (opencode-session-id)
-         messages
-       (let* ((message (nth message-number
-                            (seq-filter (lambda (message)
-                                          (member (alist-get 'type message)
-                                                  '("user" "shell")))
-                                        messages)))
-              (,result (alist-get 'id message)))
-         (when (equal "shell" (alist-get 'type message))
-           (user-error "Can't do that to a shell command"))
-         ,@body))))
+  (let ((message-number (gensym "message-number"))
+        (messages (gensym "messages"))
+        (continue (gensym "continue")))
+    `(let ((,message-number (opencode--current-message-number))
+           (,continue (lambda (,result) ,@body)))
+       (if (not ,message-number)
+           (funcall ,continue nil)
+         (opencode-api-all-messages (opencode-session-id)
+             ,messages
+           (let ((message (nth ,message-number
+                               (seq-filter (lambda (message)
+                                             (member (alist-get 'type message)
+                                                     '("user" "shell")))
+                                           ,messages))))
+             (when (equal "shell" (alist-get 'type message))
+               (user-error "Can't do that to a shell command"))
+             (funcall ,continue message)))))))
 
 (defun opencode-rename-session (&optional session)
   "Rename SESSION. If in a session buffer, rename that session."

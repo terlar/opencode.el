@@ -820,33 +820,37 @@ If point is before the first prompt, creates a new session instead."
   (interactive)
   (unless opencode-session-id
     (user-error "Not in an opencode session buffer"))
-  (opencode--current-message-id message-id
-    (if message-id
+  (opencode--current-user-message message
+    (if message
         (opencode-api-fork-session (opencode-session-id)
-            `((before . ,message-id))
+            `((before . ,(alist-get 'id message)))
             session
           (opencode-open-session-same-window session))
       ;; if before the first prompt just open a new session
       (opencode-new-session))))
 
 (defun opencode-revert-message ()
-  "Select a message to revert in the current session."
+  "Revert the user message at point and everything after it.
+Its text is put back in the prompt to edit and resend."
   (interactive)
   (unless opencode-session-id
     (user-error "Not in an opencode session buffer"))
-  (opencode--current-message-id message-id
-    (if message-id
-        (opencode-api-revert-message (opencode-session-id)
-            `((messageID . ,message-id))
-            _result
-          (message "Reverted edits after message"))
-      (user-error "No user message at point"))))
+  (let ((start (copy-marker (opencode--prompt-start))))
+    (opencode--current-user-message message
+      (unless message
+        (user-error "No user message at point"))
+      (opencode-api-revert-message (opencode-session-id)
+          `((messageID . ,(alist-get 'id message)))
+          _result
+        (opencode--truncate-to-prompt start (alist-get 'text message))
+        (message "Reverted edits after message")))))
 
 (defun opencode-unrevert-all ()
   "Unrevert all reverted messages in the current session."
   (interactive)
   (opencode-api-unrevert-all (opencode-session-id)
       _result
+    (opencode--reload-session)
     (message "Restored all edits in session")))
 
 (defun opencode--slash-commands-updated (directory)

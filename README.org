@@ -195,7 +195,7 @@ If a session buffer and frame is not active, emacs will show a notification when
                           opencode-new-worktree opencode-new-session
                           opencode-select-idle opencode-visit-last-idle
                           opencode-add-file-dwim opencode-add-region opencode-add-buffer-dwim
-                          opencode-fix-flycheck opencode-reload-locations)
+                          opencode-fix-flycheck opencode-reload-locations opencode-unrevert-all)
          collect (list command
                        (string-join (string-lines (documentation command)) " ")))
 #+end_src
@@ -217,6 +217,7 @@ If a session buffer and frame is not active, emacs will show a notification when
 | opencode-add-buffer-dwim     | Add current buffer or prompt for one to add.                                                                                                                                                                                                                                                                                         |
 | opencode-fix-flycheck        | Start a new opencode session to fix the current buffer’s Flycheck errors.                                                                                                                                                                                                                                                            |
 | opencode-reload-locations    | Make the server resolve the project of each directory again. Run this after a directory’s project changes, such as on ‘git init’, its first commit or adding a remote.                                                                                                                                                               |
+| opencode-unrevert-all        | Unrevert all reverted messages in the current session.                                                                                                                                                                                                                                                                               |
 
 * Question Tool
 #+CAPTION: Single choice question
