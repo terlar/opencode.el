@@ -336,11 +336,11 @@ On confirm, replies to the server.  On reject or dismiss, rejects."
     (opencode--toast-show `((title . "OpenCode Form")
                             (message . ,(format "Can't display form: %s" .title))
                             (variant . "warning")))
-    (opencode-api--request
-     'delete (format "/api/session/%s/form/%s?message=%s" .sessionID .id
-                     (url-hexify-string "opencode.el can't display this form"))
-     :else (lambda (error-msg)
-             (opencode--log-event "WARNING FORM CANCEL" error-msg)))))
+    (opencode-api-cancel-form-with-message
+        (.sessionID .id (url-hexify-string "opencode.el can't display this form"))
+        _response
+      :else (lambda (error-msg)
+              (opencode--log-event "WARNING FORM CANCEL" error-msg)))))
 
 (defun opencode--form-request (form)
   "Handle FORM, a Form.Info.

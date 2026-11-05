@@ -127,17 +127,22 @@ The server returns them newest first, a page at a time."
 (eval-and-compile
   (defun opencode-api--expand (method path args data return-var body)
     "Return a request with METHOD for PATH formatted with ARGS, sending DATA.
-BODY is run with the result bound to RETURN-VAR."
-    `(opencode-api--request
-      ',method ,(if args `(format ,path ,@args) path)
-      ,@(when data `(:body ,data))
-      :then (lambda (,return-var) ,@body))))
+BODY is run with the result bound to RETURN-VAR.  If BODY starts with
+:else HANDLER, HANDLER is called with the error message on failure."
+    (let ((else (when (eq (car body) :else)
+                  (prog1 (cadr body) (setq body (cddr body))))))
+      `(opencode-api--request
+        ',method ,(if args `(format ,path ,@args) path)
+        ,@(when data `(:body ,data))
+        :then (lambda (,return-var) ,@body)
+        ,@(when else `(:else ,else))))))
 
 (defmacro opencode-api--define-wrappers (&rest endpoints)
   "Define a macro for each of ENDPOINTS, which are ([METHOD] [nodata] NAME PATH).
 METHOD defaults to get.  The macro opencode-api-NAME takes the ARGS to format
 PATH with if it has any, the DATA to send if it's a post or patch that isn't
-nodata, then a variable to bind the result to and a body to run."
+nodata, then a variable to bind the result to and a body to run.  The body
+may start with :else HANDLER to handle errors."
   `(progn
      ,@(mapcar
         (lambda (endpoint)
@@ -183,13 +188,19 @@ nodata, then a variable to bind the result to and a body to run."
  (post fork-session "/api/session/%s/fork")
  (post compact-session "/api/session/%s/compact")
  (post nodata interrupt-session "/api/session/%s/interrupt")
+ (post session-prompt "/api/session/%s/prompt")
+ (post session-command "/api/session/%s/command")
+ (post session-shell "/api/session/%s/shell")
+ (post session-model "/api/session/%s/model")
+ (post session-agent "/api/session/%s/agent")
  (post revert-message "/api/session/%s/revert/stage")
  (delete unrevert-all "/api/session/%s/revert")
  (session-permissions "/api/session/%s/permission")
  (post respond-permission-request "/api/session/%s/permission/%s/reply")
  (session-forms "/api/session/%s/form")
  (post reply-form "/api/session/%s/form/%s/reply")
- (delete cancel-form "/api/session/%s/form/%s"))
+ (delete cancel-form "/api/session/%s/form/%s")
+ (delete cancel-form-with-message "/api/session/%s/form/%s?message=%s"))
 
 (provide 'opencode-api)
 ;;; opencode-api.el ends here

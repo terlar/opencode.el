@@ -824,21 +824,20 @@ records a message, so that's only done if it differs."
         (model (alist-get 'model opencode-session-agent)))
     (cl-flet ((sync-model ()
                 (if model
-                    (opencode-api--request
-                     'post (format "/api/session/%s/model" opencode-session-id)
-                     :body `((model . ,model))
-                     :then (lambda (_response) (funcall callback))
-                     :else #'opencode--send-failed)
+                    (opencode-api-session-model (opencode-session-id)
+                        `((model . ,model))
+                        _response
+                      :else #'opencode--send-failed
+                      (funcall callback))
                   (funcall callback))))
       (if (or (null agent) (equal agent opencode--server-agent))
           (sync-model)
-        (opencode-api--request
-         'post (format "/api/session/%s/agent" opencode-session-id)
-         :body `((agent . ,agent))
-         :then (lambda (_response)
-                 (setq opencode--server-agent agent)
-                 (sync-model))
-         :else #'opencode--send-failed)))))
+        (opencode-api-session-agent (opencode-session-id)
+            `((agent . ,agent))
+            _response
+          :else #'opencode--send-failed
+          (setq opencode--server-agent agent)
+          (sync-model))))))
 
 (defun opencode--unless-session-active (session-id function)
   "Call FUNCTION unless the server is still running SESSION-ID."
@@ -873,37 +872,36 @@ records a message, so that's only done if it differs."
       (let ((space-pos (seq-position string ?\s)))
         (opencode--sync-agent-and-model
          (lambda ()
-           (opencode-api--request
-            'post (format "/api/session/%s/command" opencode-session-id)
-            :body `((name . ,(substring string 1 space-pos))
-                    (text . ,(if space-pos
-                                 (substring string (1+ space-pos))
-                               "")))
-            ;; Commands can just run a callback, then no events follow to do so.
-            :then (lambda (_response)
-                    (opencode--unless-session-active
-                     opencode-session-id
-                     (lambda ()
-                       (unless (equal opencode-session-status "busy")
-                         (opencode--show-prompt)))))
-            :else #'opencode--send-failed))))
+           (opencode-api-session-command (opencode-session-id)
+               `((name . ,(substring string 1 space-pos))
+                 (text . ,(if space-pos
+                              (substring string (1+ space-pos))
+                            "")))
+               _response
+             :else #'opencode--send-failed
+             ;; Commands can just run a callback, then no events follow to do so.
+             (opencode--unless-session-active
+              opencode-session-id
+              (lambda ()
+                (unless (equal opencode-session-status "busy")
+                  (opencode--show-prompt))))))))
       (opencode--delete-temp-files temp-files))
      ((string-prefix-p "!" string)
-      (opencode-api--request
-       'post (format "/api/session/%s/shell" opencode-session-id)
-       :body `((command . ,(substring string 1)))
-       :else #'opencode--send-failed)
+      (opencode-api-session-shell (opencode-session-id)
+          `((command . ,(substring string 1)))
+          _response
+        :else #'opencode--send-failed)
       (opencode--delete-temp-files temp-files))
      (t
       (opencode--sync-agent-and-model
        (lambda ()
-         (opencode-api--request
-          'post (format "/api/session/%s/prompt" opencode-session-id)
-          :body (opencode--prompt-body string extra-parts)
-          :then (lambda (_result) (opencode--delete-temp-files temp-files))
-          :else (lambda (error-msg)
-                  (opencode--delete-temp-files temp-files)
-                  (opencode--send-failed error-msg)))))))))
+         (opencode-api-session-prompt (opencode-session-id)
+             (opencode--prompt-body string extra-parts)
+             _result
+           :else (lambda (error-msg)
+                   (opencode--delete-temp-files temp-files)
+                   (opencode--send-failed error-msg))
+           (opencode--delete-temp-files temp-files))))))))
 
 (defun opencode-session--send-synthetic-input (string)
   "Send STRING to the current opencode session.
