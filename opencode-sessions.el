@@ -162,20 +162,23 @@ Its output is inserted there once the call completes.")
        (with-current-buffer buffer
          ,@body))))
 
+(defun opencode--selectable-agent-p (agent)
+  "Return non-nil if AGENT can be the agent of a session."
+  (not (equal "subagent" (alist-get 'mode agent))))
+
 (defun opencode-cycle-session-agent ()
   "Switch to the next agent in `opencode-session-agents'."
   (interactive)
-  (let* ((name (alist-get 'name opencode-session-agent))
+  (let* ((id (alist-get 'id opencode-session-agent))
          (agents opencode-session-agents)
-         (pos (and name (cl-position-if
-                         (lambda (agent)
-                           (string= name (alist-get 'name agent)))
-                         agents))))
+         (pos (and id (cl-position-if
+                       (lambda (agent)
+                         (string= id (alist-get 'id agent)))
+                       agents))))
     (when pos
       (setcar (nthcdr pos agents) opencode-session-agent)
       (when-let* ((next (seq-find
-                         (lambda (agent)
-                           (string= "primary" (alist-get 'mode agent)))
+                         #'opencode--selectable-agent-p
                          (append (nthcdr (1+ pos) agents)
                                  (seq-take agents (1+ pos))))))
         (setq opencode-session-agent next))))
@@ -251,45 +254,50 @@ POP-TO-BUFFER controls whether to pop to or switch to the session buffer."
   (interactive)
   (opencode--select-sessions "Session: " opencode-alerted-sessions "No idle sessions"))
 
+(defun opencode--model-ref (model)
+  "Return the Model.Ref for MODEL, a Model.Info."
+  `((id . ,(alist-get 'id model))
+    (providerID . ,(alist-get 'providerID model))))
+
+(defun opencode--find-model (ref)
+  "Return the enabled Model.Info that the Model.Ref REF refers to, or nil."
+  (seq-find (lambda (model)
+              (and (equal (alist-get 'providerID ref) (alist-get 'providerID model))
+                   (equal (alist-get 'id ref) (alist-get 'id model))))
+            opencode-models))
+
 (defun opencode--collect-all-models ()
-  "Collect all models from `opencode-providers' as a list.
-Each element is (display-name . (provider-id provider-name model-id))."
-  (let (result)
-    (dolist (provider opencode-providers)
-      (let-alist provider
-        (dolist (model-entry .models)
-          (let ((model (cdr model-entry)))
-            (push (list (alist-get 'name model)
-                        `((providerID . ,.id)
-                          (modelID . ,(alist-get 'id model)))
-                        .name)
-                  result)))))
-    (nreverse result)))
+  "Collect all models from `opencode-models' as a list.
+Each element is (display-name model-ref provider-id)."
+  (mapcar (lambda (model)
+            (list (alist-get 'name model)
+                  (opencode--model-ref model)
+                  (alist-get 'providerID model)))
+          opencode-models))
+
+(defun opencode--model-variant-p (model variant)
+  "Return non-nil if MODEL, a Model.Info, has a variant with id VARIANT."
+  (seq-find (lambda (candidate)
+              (equal variant (alist-get 'id candidate)))
+            (alist-get 'variants model)))
 
 (defun opencode-select-model ()
   "Select a model for the current session and agent using completion."
   (interactive)
   (unless opencode-session-agent
     (user-error "not in a session"))
-  (when-let* ((model (opencode--annotated-completion
-                      "Model: "
-                      (opencode--collect-all-models))))
-    (setf (alist-get 'model opencode-session-agent) model
-          opencode-last-model model)
-    (when-let* ((variant (alist-get 'variant opencode-session-agent)))
-      (unless (alist-get variant
-                         (alist-get 'variants (opencode--current-model)))
-        (setq opencode-session-agent
-              (assq-delete-all 'variant opencode-session-agent))))))
+  (when-let* ((ref (opencode--annotated-completion
+                    "Model: "
+                    (opencode--collect-all-models))))
+    (let ((variant (map-nested-elt opencode-session-agent '(model variant))))
+      (when (opencode--model-variant-p (opencode--find-model ref) variant)
+        (setf (alist-get 'variant ref) variant))
+      (setf (alist-get 'model opencode-session-agent) ref
+            opencode-last-model (copy-alist ref)))))
 
 (defun opencode--current-model ()
-  "Return the active model for this session."
-  (let-alist opencode-session-agent
-    (map-nested-elt
-     (seq-find (lambda (provider)
-                 (string= .model.providerID (alist-get 'id provider)))
-               opencode-providers)
-     `(models ,(intern .model.modelID)))))
+  "Return the active model for this session, as a Model.Info."
+  (opencode--find-model (alist-get 'model opencode-session-agent)))
 
 (defun opencode-select-variant ()
   "Select a variant for the current model."
@@ -298,14 +306,17 @@ Each element is (display-name . (provider-id provider-name model-id))."
     (user-error "not in a session"))
   (let ((variants (alist-get 'variants (opencode--current-model))))
     (if variants
-        (setf (alist-get 'variant opencode-session-agent)
-              (opencode--annotated-completion
-               "Variant: "
-               (cl-loop for (variant . options) in
-                        variants
-                        collect (list (symbol-name variant)
-                                      variant
-                                      (format "%s" options)))))
+        (let ((variant (opencode--annotated-completion
+                        "Variant: "
+                        (cl-loop for variant in variants
+                                 for id = (alist-get 'id variant)
+                                 collect (list id id
+                                               (format "%s" (or (alist-get 'settings variant)
+                                                                "")))))))
+          (setf (alist-get 'model opencode-session-agent)
+                (copy-alist (alist-get 'model opencode-session-agent)))
+          (setf (alist-get 'variant (alist-get 'model opencode-session-agent))
+                variant))
       (message "No variants"))))
 
 (defun opencode-select-child-session ()
@@ -375,7 +386,7 @@ Each element is (display-name . (provider-id provider-name model-id))."
 (defun opencode--session-status-indicator ()
   "Return mode line indicator for session status."
   (let-alist opencode-session-agent
-    (let* ((agent (pcase .name
+    (let* ((agent (pcase (or .name .id "-")
                     ("Planner-Sisyphus" "Planner")
                     (name name)))
            (model (opencode--current-model))
@@ -383,15 +394,18 @@ Each element is (display-name . (provider-id provider-name model-id))."
                      ("busy" "⏳")
                      ("idle" "🚀")
                      (_ "")))
-           (context-used (* 100 (/ (float opencode-session-tokens)
-                                   (map-nested-elt model '(limit context))))))
+           (limit (map-nested-elt model '(limit context)))
+           (context-used (if (and (numberp limit) (> limit 0))
+                             (* 100 (/ (float opencode-session-tokens) limit))
+                           0)))
       (if (< (window-width) 115)
           (format "[🤖 %s] %.0f%%%% %s  " agent context-used status)
         (format "[🤖 %s - %s] %.0f%%%% %s  "
                 agent
                 (concat (alist-get 'name model)
-                        (when .variant
-                          (propertize (format " %s" .variant)
+                        (when (and .model.variant
+                                   (not (equal .model.variant "default")))
+                          (propertize (format " %s" .model.variant)
                                       'face '(bold opencode-request-margin-highlight))))
                 context-used status)))))
 

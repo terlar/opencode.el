@@ -88,8 +88,8 @@ This is an abnormal hook. Each function receives one argument, SESSION-ID."
 (defun opencode--server-running-p ()
   "Return non-nil if an opencode server is running at configured host and port."
   (condition-case err
-      (plz 'get (format "http://%s:%d/global/health" opencode-host opencode-port)
-        :headers (list (opencode--auth-header))
+      (plz 'get (format "http://%s:%d/api/info" opencode-host opencode-port)
+        :headers (delq nil (list (opencode--auth-header)))
         :timeout 1)
     (plz-http-error
      (when-let* ((plz-error (cl-third err)))
@@ -113,10 +113,8 @@ set `opencode-server-password' to connect to it"))))
                      (cl-loop repeat 32
                               collect (aref chars (random (length chars))))))))
   (setf opencode--process
-        (let ((process-environment (cl-list*
-                                    (format "OPENCODE_SERVER_USERNAME=%s"
-                                            opencode-server-username)
-                                    (format "OPENCODE_SERVER_PASSWORD=%s"
+        (let ((process-environment (cons
+                                    (format "OPENCODE_PASSWORD=%s"
                                             opencode-server-password)
                                     process-environment)))
           (start-process-shell-command
@@ -129,7 +127,7 @@ set `opencode-server-password' to connect to it"))))
      (with-current-buffer "*opencode-serve*"
        (goto-char (process-mark process))
        (insert output))
-     (when (string-prefix-p "opencode server listening on" output)
+     (when (string-search "server listening on" output)
        ;; Remove filter to avoid repeated callbacks
        (set-process-filter process nil)
        (opencode-connect opencode-host opencode-port on-connect))))
@@ -188,9 +186,7 @@ Call ON-CONNECT once connected."
   (setq opencode-api-url (format "http://%s:%d" host port))
   (setq opencode--slash-commands-by-directory nil)
   (opencode--subscribe-global-events)
-  (opencode-api-configured-providers result
-    (setq opencode-providers (alist-get 'providers result))
-    (opencode--fetch-agents on-connect))
+  (opencode--fetch-models (lambda () (opencode--fetch-agents on-connect)))
   (message "Connected to %s" opencode-api-url))
 
 (defun opencode-open-project (directory)
@@ -583,6 +579,21 @@ Also prompts for pending questions or permissions if any."
     (kill-process opencode--process))
   (setq opencode--event-subscription nil
         opencode--slash-commands-by-directory nil))
+
+(defun opencode--fetch-models (callback)
+  "Fetch enabled models and the default model from server.
+Run CALLBACK once fetched."
+  (opencode-api-models models
+    (setq opencode-models
+          (seq-remove (lambda (model)
+                        (opencode--json-falsy (alist-get 'enabled model)))
+                      models))
+    (opencode-api-default-model default
+      (unless (opencode--find-model opencode-last-model)
+        (setq opencode-last-model
+              (unless (opencode--json-falsy default)
+                (opencode--model-ref default))))
+      (funcall callback))))
 
 (defun opencode--fetch-agents (callback)
   "Fetch available agents from server and filter out hidden agents.
