@@ -14,24 +14,24 @@
 (require 'comint)
 (require 'hideshow)
 (require 'magit)
-(require 'mailcap)
 (require 'markdown-ts-mode)
 (require 'opencode-api)
 (require 'opencode-common)
 (require 'opencode-convert)
 (require 'opencode-format-tool-calls)
 (require 'project)
+(require 'url-util)
 (require 'vtable)
 (require 'yank-media)
 
-(defcustom opencode-shown-outputs '(bash-non-zero error edit apply_patch)
+(defcustom opencode-shown-outputs '(shell-non-zero error edit patch)
   "Outputs in session buffers to show unfolded when first displayed.
-A list of symbols: `reasoning', a tool name like `bash' or `grep',
-`bash-non-zero' to show bash output only if the command failed, or
+A list of symbols: `reasoning', a tool name like `shell' or `grep',
+`shell-non-zero' to show shell tool output only if the command failed, or
 `error' to show the error of any tool call that failed.
 Shown outputs can still be folded manually with `hs-toggle-hiding'."
   :type '(repeat (choice (const reasoning)
-                         (const bash-non-zero)
+                         (const shell-non-zero)
                          (const error)
                          (symbol :tag "Tool name")))
   :group 'opencode)
@@ -159,6 +159,10 @@ TYPE is text, reasoning, tool or compaction.  KEY identifies the block.")
 
 (defvar-local opencode--blocks-with-output nil
   "KEYs of the text and reasoning blocks of this step that have output.")
+
+(defvar-local opencode--replayed-unfinished-messages nil
+  "Ids of the messages still being generated when they were replayed.
+Their blocks had output in the replay, without this client seeing any delta.")
 
 (defvar-local opencode-last-response-start nil
   "Position of the start of the latest assistant text block.")
@@ -577,13 +581,14 @@ in webchat."
   (unless opencode-session-id
     (user-error "Not in an OpenCode session"))
   (message "Fetching conversation...")
-  (opencode-api-session-messages (opencode-session-id)
-      messages
-    (let ((transcript (opencode--conversation-to-markdown messages)))
-      (kill-new transcript)
-      (message "Copied conversation (%d messages, %d characters)"
-               (length messages)
-               (length transcript)))))
+  (opencode-api--all-messages
+   opencode-session-id
+   (lambda (messages)
+     (let ((transcript (opencode--conversation-to-markdown messages)))
+       (kill-new transcript)
+       (message "Copied conversation (%d messages, %d characters)"
+                (length messages)
+                (length transcript))))))
 
 (defun opencode-kill-session (&optional session)
   "Kill SESSION."
@@ -1230,25 +1235,16 @@ Questions are displayed by their form."
       (overlay-put ov 'line-prefix margin)
       (overlay-put ov 'wrap-prefix margin))))
 
+(defun opencode--replay-input (text)
+  "Replay a prompt with input TEXT."
+  (opencode--show-prompt)
+  (insert text "\n")
+  (let ((comint-input-sender #'opencode--highlight-input))
+    (comint-send-input)))
+
 (defun opencode--replay-user-request (message)
   "Replay a user request MESSAGE."
-  (opencode--show-prompt)
-  (let-alist message
-    (dolist (part .parts)
-      (let-alist part
-        (unless .synthetic
-          (pcase .type
-            ("text" (insert .text))))))
-    (insert "\n")
-    (let ((comint-input-sender #'opencode--highlight-input))
-      (comint-send-input))
-    (let ((agent (seq-find (lambda (agent)
-                             (string= (alist-get 'name agent)
-                                      .info.agent))
-                           opencode-session-agents)))
-      (setq opencode-session-agent agent)
-      (setf (alist-get 'model opencode-session-agent) .info.model)
-      (setf (alist-get 'variant opencode-session-agent) .info.model.variant))))
+  (opencode--replay-input (alist-get 'text message)))
 
 (defun opencode--insert-block-with-margin (text face)
   "Insert TEXT with FACE margin highlight."
@@ -1296,7 +1292,7 @@ extra margin line, and the line after a fold would join its first line."
                  (header-end (line-beginning-position 2))
                  (end (progn
                         (goto-char beg)
-                        ;; apply_patch headers have synthetic line counts.
+                        ;; patch tool headers have synthetic line counts.
                         (diff-end-of-hunk nil t)
                         (point))))
             (when diff-refine
@@ -1319,49 +1315,62 @@ Return a marker at the end of the call, where its output goes."
              (skip-chars-backward "\n")
              (point-marker))
       (opencode--maybe-insert-block-spacing)
-      (when (member tool '("edit" "apply_patch"))
+      (when (member tool '("edit" "patch"))
         (opencode--refine-diff-hunks start)
         (opencode--fold start nil (memq (intern tool) opencode-shown-outputs))))))
 
-(defun opencode--bash-non-zero-p (part)
-  "Return non-nil if PART is a bash call that exited with a non-zero status."
-  (let-alist part
-    (and (string= .tool "bash")
-         (numberp .state.metadata.exit)
-         (/= .state.metadata.exit 0))))
+(defun opencode--shell-failed-p (tool info)
+  "Return non-nil if INFO is of a failed shell TOOL.
+INFO has an optional status and exit, like the metadata of a tool call."
+  (let-alist info
+    (and (string= tool "shell")
+         (or (member .status '("timeout" "killed"))
+             (and (numberp .exit) (/= .exit 0))))))
 
-(defun opencode--tool-output-shown-p (part)
-  "Return non-nil if the output of the tool call in PART starts unfolded."
-  (let-alist part
-    (or (memq (intern .tool) opencode-shown-outputs)
-        (and (string= .state.status "error")
+(defun opencode--tool-output-shown-p (tool state)
+  "Return non-nil if the output of the TOOL call with STATE starts unfolded."
+  (let-alist state
+    (or (memq (intern tool) opencode-shown-outputs)
+        (and (string= .status "error")
              (memq 'error opencode-shown-outputs))
-        ;; Only a user's shell command has an empty title.
-        (and (string= .tool "bash") (equal .state.title ""))
-        (and (memq 'bash-non-zero opencode-shown-outputs)
-             (opencode--bash-non-zero-p part)))))
+        (and (memq 'shell-non-zero opencode-shown-outputs)
+             (opencode--shell-failed-p tool .metadata)))))
 
-(defconst opencode--ignore-output-for-tools '("edit" "write" "apply_patch"
+(defconst opencode--ignore-output-for-tools '("edit" "write" "patch"
                                               "question" "todowrite")
   "Don't show the output for these tools.")
 
-(defun opencode--maybe-insert-tool-output (part call-end)
-  "Insert the output or error of the finished tool call in PART at CALL-END.
+(defun opencode--tool-content-text (content)
+  "Return the text items of tool output CONTENT joined, or nil if there are none."
+  (when-let* ((texts (cl-loop for item in content
+                              when (equal "text" (alist-get 'type item))
+                              collect (alist-get 'text item))))
+    (string-join texts "\n")))
+
+(defun opencode--add-error-face (beg end)
+  "Style BEG to END with the `error' face."
+  ;; Font-lock can clear text properties on refontification.
+  (let ((overlay (make-overlay beg end)))
+    (overlay-put overlay 'face 'error)
+    (overlay-put overlay 'evaporate t)))
+
+(defun opencode--maybe-insert-tool-output (tool state call-end)
+  "Insert the output or error of the finished TOOL call with STATE at CALL-END.
 Parallel tool calls can complete after later output, so it's inserted
 after its call, foldable onto the call's last line, and folded unless
 `opencode--tool-output-shown-p'.  Edits show only their diff, unless
-they failed.  Errors and the output of bash commands that exited with a
+they failed.  Errors and the output of shell tool calls that exited with a
 non-zero status are highlighted with the `error' face."
-  (let-alist part
-    (when (and (member .state.status '("completed" "error"))
+  (let-alist state
+    (when (and (member .status '("completed" "error"))
                call-end
                (marker-position call-end))
-      (let* ((failed (string= .state.status "error"))
+      (let* ((failed (string= .status "error"))
              (output (if failed
-                         .state.error
-                       (and (not (member .tool opencode--ignore-output-for-tools))
-                            .state.output)))
-             (errorp (or failed (opencode--bash-non-zero-p part))))
+                         .error.message
+                       (and (not (member tool opencode--ignore-output-for-tools))
+                            (opencode--tool-content-text .content))))
+             (errorp (or failed (opencode--shell-failed-p tool .metadata))))
         (when output
           (let ((inhibit-read-only t)
                 (end (copy-marker call-end t)))
@@ -1376,20 +1385,17 @@ non-zero status are highlighted with the `error' face."
                                   (1+ (opencode--output-content-end end))
                                   (if errorp 'error 'opencode-tool-margin-highlight))
             (when errorp
-              ;; Font-lock can clear text properties on refontification.
-              (let ((overlay (make-overlay (save-excursion
-                                             (goto-char call-end)
-                                             (forward-line 2)
-                                             (point))
-                                           (opencode--output-content-end end))))
-                (overlay-put overlay 'face 'error)
-                (overlay-put overlay 'evaporate t)))
+              (opencode--add-error-face (save-excursion
+                                          (goto-char call-end)
+                                          (forward-line 2)
+                                          (point))
+                                        (opencode--output-content-end end)))
             (opencode--fold (save-excursion
                               (goto-char (opencode--output-content-end call-end))
                               (let ((inhibit-field-text-motion t))
                                 (line-beginning-position)))
                             end
-                            (opencode--tool-output-shown-p part))
+                            (opencode--tool-output-shown-p tool state))
             (set-marker end nil))))
       (set-marker call-end nil))))
 
@@ -1397,45 +1403,150 @@ non-zero status are highlighted with the `error' face."
   "Open SESSION using the current window."
   (opencode-open-session session :pop-to-buffer nil))
 
-(defun opencode--replay-session-messages (messages)
-  "Display past session MESSAGES."
+(defconst opencode--migrated-tool-names
+  '(("bash" . "shell") ("apply_patch" . "patch") ("task" . "subagent"))
+  "Old names of tools, that sessions migrated from v1 still have.")
+
+(defconst opencode--migrated-tool-inputs
+  '((filePath . path) (subagent_type . agent))
+  "Old names of tool inputs, that sessions migrated from v1 still have.")
+
+(defun opencode--migrate-tool-input (input)
+  "Return tool INPUT with the current names of its arguments."
+  (if (listp input)
+      (mapcar (lambda (pair)
+                (cons (alist-get (car pair) opencode--migrated-tool-inputs (car pair))
+                      (cdr pair)))
+              input)
+    input))
+
+(defun opencode--replay-tool (message-id tool)
+  "Display the TOOL content item of the assistant message MESSAGE-ID.
+Calls not yet finished are recorded so that later events finish them."
+  (let-alist tool
+    (let ((key (opencode--tool-key message-id .id))
+          (name (or (cdr (assoc .name opencode--migrated-tool-names)) .name))
+          (input (opencode--migrate-tool-input .state.input)))
+      (pcase .state.status
+        ;; its input is still incomplete, so it's displayed once called
+        ("streaming" (puthash key (list :name name) opencode--tool-calls))
+        ("running"
+         (puthash key (list :name name :input input) opencode--tool-calls)
+         (opencode-session--display-tool-call key))
+        (_ (opencode--maybe-insert-tool-output
+            name .state (opencode--insert-tool-block name input)))))))
+
+(defun opencode--replay-assistant-message (message)
+  "Display the assistant MESSAGE."
+  (let-alist message
+    (unless .time.completed
+      (push .id opencode--replayed-unfinished-messages))
+    (let (last-type)
+      (dolist (item .content)
+        (let ((type (alist-get 'type item))
+              (text (string-trim (or (alist-get 'text item) ""))))
+          (if (string= type "tool")
+              (opencode--replay-tool .id item)
+            (unless (string-empty-p text)
+              (let ((start (opencode--session-process-position)))
+                (pcase type
+                  ("text"
+                   (unless (equal last-type "text")
+                     (setf opencode-last-response-start start))
+                   (setq opencode--table-scan-marker (copy-marker start))
+                   (opencode--output text)
+                   (opencode--align-finished-tables t))
+                  ("reasoning"
+                   (opencode--insert-reasoning-block text)))
+                (opencode--output "\n\n")
+                (when (equal type "reasoning")
+                  (opencode--fold
+                   start nil
+                   (memq 'reasoning opencode-shown-outputs))))
+              (setq last-type type))))))
+    (when .tokens
+      (setq opencode-session-tokens (opencode--tokens-total .tokens)))))
+
+(defun opencode--replay-message (message)
+  "Display the past session MESSAGE."
+  (let-alist message
+    (pcase .type
+      ("user" (opencode--replay-user-request message))
+      ("assistant" (opencode--replay-assistant-message message))
+      ("shell"
+       (opencode--replay-input (concat "!" .command))
+       (opencode--insert-shell-output (or .output.output "")
+                                      (opencode--shell-failed-p "shell" message)))
+      ("compaction"
+       (opencode--insert-compaction-started)
+       (pcase .status
+         ("completed" (opencode--insert-compaction-summary .summary))
+         ("failed" (opencode--insert-error .error.message))))
+      ("idle"
+       (when (equal .outcome "failed")
+         (opencode--insert-error (or .error.message "Session failed")))))))
+
+(defun opencode--replay-session-messages (messages &optional revert-message-id)
+  "Display past session MESSAGES.
+Those from REVERT-MESSAGE-ID on have a staged revert, so are hidden."
   (let ((inhibit-redisplay t)
         (comint-output-filter-functions
          (remove #'comint-postoutput-scroll-to-bottom
                  comint-output-filter-functions)))
     (dolist (message messages)
-      (let-alist (alist-get 'info message)
-        (pcase .role
-          ("user" (opencode--replay-user-request message))
-          ("assistant"
-           (let (last-part-type)
-             (dolist (part (alist-get 'parts message))
-               (let-alist part
-                 (if (string= .type "tool")
-                     (opencode--maybe-insert-tool-output
-                      part (opencode--insert-tool-block .tool .state.input))
-                   (when .text
-                     (let ((text (string-trim .text)))
-                       (unless (string-empty-p text)
-                         (let ((start (opencode--session-process-position)))
-                           (pcase .type
-                             ("text"
-                              (unless (equal last-part-type "text")
-                                (setf opencode-last-response-start start))
-                              (setq opencode--table-scan-marker (copy-marker start))
-                              (opencode--output text)
-                              (opencode--align-finished-tables t))
-                             ("reasoning"
-                              (opencode--insert-reasoning-block text)))
-                           (opencode--output "\n\n")
-                           (when (equal .type "reasoning")
-                             (opencode--fold
-                              start nil
-                              (memq 'reasoning opencode-shown-outputs))))
-                         (setq last-part-type .type))))))))
-           (setq opencode-session-tokens
-                 (+ .tokens.input .tokens.output .tokens.reasoning
-                    .tokens.cache.read .tokens.cache.write))))))))
+      (unless (and revert-message-id
+                   (not (string< (alist-get 'id message) revert-message-id)))
+        (opencode--replay-message message)))
+    (setq opencode--current-block nil)))
+
+(declare-function opencode--permission-request "opencode-permission")
+(declare-function opencode--form-request "opencode-question")
+
+(defun opencode--fetch-pending (session-id)
+  "Queue SESSION-ID's pending permissions and forms.
+Events are lost when not connected, so this is the only way to see them."
+  (opencode-api-session-permissions (session-id)
+      requests
+    (dolist (request requests)
+      (let-alist request
+        (opencode--permission-request
+         .id .sessionID .action .metadata .resources .save .message))))
+  (opencode-api-session-forms (session-id)
+      forms
+    (mapc #'opencode--form-request forms)))
+
+(defun opencode--load-session (session &optional callback)
+  "Display SESSION in the current buffer and go to a prompt, unless it's busy.
+If CALLBACK is given, it will be called with SESSION afterwards."
+  (let-alist session
+    (opencode-api--all-messages
+     .id
+     (lambda (messages)
+       (setq opencode--replayed-unfinished-messages nil
+             opencode--server-agent
+             (or .agent
+                 ;; sessions migrated from v1 only have it on their messages
+                 (alist-get 'agent
+                            (seq-find (lambda (message)
+                                        (equal "assistant" (alist-get 'type message)))
+                                      (reverse messages)))
+                 ;; a session with no agent yet uses the default, listed first
+                 (alist-get 'id (seq-find #'opencode--selectable-agent-p
+                                          opencode-agents))))
+       (opencode--replay-session-messages messages .revert.messageID)
+       ;; A new session keeps the agent and model of where it was opened from.
+       (when messages
+         (opencode--adopt-selection opencode--server-agent .model))
+       (opencode-api-sessions-active
+         active
+         (if (assq (intern .id) active)
+             (setq opencode-session-status "busy")
+           (setq opencode-session-status "idle")
+           (opencode--show-prompt))
+         (force-mode-line-update)
+         (opencode--fetch-pending .id)
+         (when callback
+           (funcall callback session)))))))
 
 (cl-defun opencode-open-session (session &key (pop-to-buffer t) callback)
   "Open comint based shell for SESSION.
@@ -1448,15 +1559,15 @@ If CALLBACK is given, it will be called with the session after it is initialized
           (if pop-to-buffer
               (pop-to-buffer old-buffer)
             (switch-to-buffer old-buffer))
-        (let ((buffer (generate-new-buffer (format "*OpenCode: %s*" .title)))
+        (let ((buffer (generate-new-buffer
+                       (format "*OpenCode: %s*" (opencode--session-title session))))
               (agent (copy-tree opencode-session-agent))
               (agents (copy-tree opencode-session-agents)))
           (with-current-buffer buffer
             (opencode-session-mode)
             (setq opencode-session-id .id
                   opencode-last-session-buffer buffer
-                  default-directory (file-name-as-directory .directory)
-                  opencode--tool-calls-displayed (make-hash-table :test 'equal)
+                  default-directory (file-name-as-directory .location.directory)
                   opencode-session-agents (mapcar (lambda (agent)
                                                     (unless (alist-get 'model agent)
                                                       (setf (alist-get 'model agent)
@@ -1464,7 +1575,9 @@ If CALLBACK is given, it will be called with the session after it is initialized
                                                     agent)
                                                   (or agents
                                                       (copy-tree opencode-agents)))
-                  opencode-session-agent (or agent (car opencode-session-agents))
+                  opencode-session-agent (or agent
+                                             (seq-find #'opencode--selectable-agent-p
+                                                       opencode-session-agents))
                   mode-line-process '(:eval (opencode--session-status-indicator)))
             (hack-dir-local-variables-non-file-buffer)
             (puthash .id buffer opencode-session-buffers)
@@ -1472,18 +1585,7 @@ If CALLBACK is given, it will be called with the session after it is initialized
               (set-process-query-on-exit-flag proc nil)
               (add-hook 'kill-buffer-hook #'opencode--session-cleanup nil t)
               (opencode-insert-logo)
-              (opencode-api-session-messages (.id)
-                  messages
-                (opencode--replay-session-messages messages)
-                (opencode-api-sessions-status
-                  busy-sessions
-                  (if-let* ((session-status (cdr (assoc-string .id busy-sessions))))
-                      (opencode-session--set-status
-                       .id
-                       (alist-get 'type session-status))
-                    (opencode--show-prompt))
-                  (when callback
-                    (funcall callback session)))))
+              (opencode--load-session session callback))
             (if pop-to-buffer
                 (pop-to-buffer buffer)
               (switch-to-buffer buffer))))))))
@@ -1502,56 +1604,22 @@ Returns nil if point is before the first prompt."
                count t))))
 
 (defmacro opencode--current-message-id (result &rest body)
-  "Run BODY with RESULT as the message id of the user message at point."
+  "Run BODY with RESULT as the message id of the user message at point.
+Prompts are user messages and shell commands, in order."
   (declare (indent defun))
-  `(opencode--current-message-exchange (,result _assistant-id)
-     ,@body))
-
-(defmacro opencode--current-message-exchange (bindings &rest body)
-  "Run BODY with BINDINGS (user-id assistant-id)
-bound to the exchange ids at point."
-  (declare (indent defun))
-  (let ((user-id (car bindings))
-        (assistant-id (cadr bindings)))
-    `(when-let* ((message-number (opencode--current-message-number)))
-       (opencode-api-session-messages (opencode-session-id)
-           messages
-         (let* ((user-message-index
-                 (cl-loop for message in messages
-                          for index from 0
-                          when (string= "user" (map-nested-elt message '(info role)))
-                          count t into count
-                          when (= (1- count) message-number)
-                          return index))
-                (user-message (and user-message-index
-                                   (nth user-message-index messages)))
-                (assistant-message (and user-message-index
-                                        (let ((next-message (nth (1+ user-message-index)
-                                                                 messages)))
-                                          (when (string= "assistant"
-                                                         (map-nested-elt next-message
-                                                                         '(info role)))
-                                            next-message))))
-                (,user-id (map-nested-elt user-message '(info id)))
-                (,assistant-id (map-nested-elt assistant-message '(info id))))
-           ,@body)))))
-
-(defun opencode--delete-message-at-point ()
-  "Delete the prompt at point and its output from the session buffer."
-  (let ((start (save-excursion
-                 (end-of-line)
-                 (comint-previous-prompt 1)
-                 (line-beginning-position)))
-        (end (save-excursion
-               (end-of-line)
-               (comint-previous-prompt 1)
-               (goto-char (line-beginning-position 2))
-               (if (ignore-errors (comint-next-prompt 1) t)
-                   (line-beginning-position)
-                 (point-max)))))
-    (let ((inhibit-read-only t))
-      (remove-overlays start end)
-      (delete-region start end))))
+  `(when-let* ((message-number (opencode--current-message-number)))
+     (opencode-api--all-messages
+      opencode-session-id
+      (lambda (messages)
+        (let* ((message (nth message-number
+                             (seq-filter (lambda (message)
+                                           (member (alist-get 'type message)
+                                                   '("user" "shell")))
+                                         messages)))
+               (,result (alist-get 'id message)))
+          (when (equal "shell" (alist-get 'type message))
+            (user-error "Can't do that to a shell command"))
+          ,@body)))))
 
 (defun opencode-rename-session (&optional session)
   "Rename SESSION. If in a session buffer, rename that session."

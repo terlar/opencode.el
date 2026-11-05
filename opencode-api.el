@@ -14,6 +14,8 @@
 (require 'opencode-common)
 (require 'plz)
 (require 'json)
+(require 'url-util)
+
 (defvar opencode-api-url nil
   "URL of the opencode server we're connected to.")
 
