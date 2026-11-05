@@ -560,14 +560,13 @@ in webchat."
   (unless opencode-session-id
     (user-error "Not in an OpenCode session"))
   (message "Fetching conversation...")
-  (opencode-api--all-messages
-   opencode-session-id
-   (lambda (messages)
-     (let ((transcript (opencode--conversation-to-markdown messages)))
-       (kill-new transcript)
-       (message "Copied conversation (%d messages, %d characters)"
-                (length messages)
-                (length transcript))))))
+  (opencode-api-all-messages (opencode-session-id)
+      messages
+    (let ((transcript (opencode--conversation-to-markdown messages)))
+      (kill-new transcript)
+      (message "Copied conversation (%d messages, %d characters)"
+               (length messages)
+               (length transcript)))))
 
 (defun opencode-kill-session (&optional session)
   "Kill SESSION."
@@ -1494,34 +1493,33 @@ Events are lost when not connected, so this is the only way to see them."
   "Display SESSION in the current buffer and go to a prompt, unless it's busy.
 If CALLBACK is given, it will be called with SESSION afterwards."
   (let-alist session
-    (opencode-api--all-messages
-     .id
-     (lambda (messages)
-       (setq opencode--replayed-unfinished-messages nil
-             opencode--server-agent
-             (or .agent
-                 ;; sessions migrated from v1 only have it on their messages
-                 (alist-get 'agent
-                            (seq-find (lambda (message)
-                                        (equal "assistant" (alist-get 'type message)))
-                                      (reverse messages)))
-                 ;; a session with no agent yet uses the default, listed first
-                 (alist-get 'id (seq-find #'opencode--selectable-agent-p
-                                          opencode-agents))))
-       (opencode--replay-session-messages messages .revert.messageID)
-       ;; A new session keeps the agent and model of where it was opened from.
-       (when messages
-         (opencode--adopt-selection opencode--server-agent .model))
-       (opencode-api-sessions-active
-         active
-         (if (assq (intern .id) active)
-             (setq opencode-session-status "busy")
-           (setq opencode-session-status "idle")
-           (opencode--show-prompt))
-         (force-mode-line-update)
-         (opencode--fetch-pending .id)
-         (when callback
-           (funcall callback session)))))))
+    (opencode-api-all-messages (.id)
+        messages
+      (setq opencode--replayed-unfinished-messages nil
+            opencode--server-agent
+            (or .agent
+                ;; sessions migrated from v1 only have it on their messages
+                (alist-get 'agent
+                           (seq-find (lambda (message)
+                                       (equal "assistant" (alist-get 'type message)))
+                                     (reverse messages)))
+                ;; a session with no agent yet uses the default, listed first
+                (alist-get 'id (seq-find #'opencode--selectable-agent-p
+                                         opencode-agents))))
+      (opencode--replay-session-messages messages .revert.messageID)
+      ;; A new session keeps the agent and model of where it was opened from.
+      (when messages
+        (opencode--adopt-selection opencode--server-agent .model))
+      (opencode-api-sessions-active
+        active
+        (if (assq (intern .id) active)
+            (setq opencode-session-status "busy")
+          (setq opencode-session-status "idle")
+          (opencode--show-prompt))
+        (force-mode-line-update)
+        (opencode--fetch-pending .id)
+        (when callback
+          (funcall callback session))))))
 
 (defun opencode--rebuild-session ()
   "Display the current session buffer again from the server, keeping unsent input.
@@ -1612,18 +1610,17 @@ Returns nil if point is before the first prompt."
 Prompts are user messages and shell commands, in order."
   (declare (indent defun))
   `(when-let* ((message-number (opencode--current-message-number)))
-     (opencode-api--all-messages
-      opencode-session-id
-      (lambda (messages)
-        (let* ((message (nth message-number
-                             (seq-filter (lambda (message)
-                                           (member (alist-get 'type message)
-                                                   '("user" "shell")))
-                                         messages)))
-               (,result (alist-get 'id message)))
-          (when (equal "shell" (alist-get 'type message))
-            (user-error "Can't do that to a shell command"))
-          ,@body)))))
+     (opencode-api-all-messages (opencode-session-id)
+         messages
+       (let* ((message (nth message-number
+                            (seq-filter (lambda (message)
+                                          (member (alist-get 'type message)
+                                                  '("user" "shell")))
+                                        messages)))
+              (,result (alist-get 'id message)))
+         (when (equal "shell" (alist-get 'type message))
+           (user-error "Can't do that to a shell command"))
+         ,@body))))
 
 (defun opencode-rename-session (&optional session)
   "Rename SESSION. If in a session buffer, rename that session."

@@ -897,7 +897,7 @@ Call ids are only unique within a step, so they're keyed with the message too."
                                      ((id . "plan") (name . "Plan"))))
           (opencode-agents '(((id . "build") (name . "Build") (mode . "primary")))))
       (cl-flet ((load-session (session messages)
-                  (cl-letf (((symbol-function 'opencode-api--all-messages)
+                  (cl-letf (((symbol-function 'opencode-api--fetch-all-messages)
                              (lambda (_id callback) (funcall callback messages)))
                             ((symbol-function 'opencode--replay-session-messages) #'ignore)
                             ((symbol-function 'opencode-api--request) #'ignore))
@@ -1075,7 +1075,9 @@ Call ids are only unique within a step, so they're keyed with the message too."
                                 (cursor . ((previous . "p") (next . :null))))
                             '((data . (((id . "3")) ((id . "2"))))
                               (cursor . ((next . "a=b")))))))))
-      (opencode-api--all-messages "session" (lambda (messages) (setq result messages))))
+      (opencode-api-all-messages ("session")
+          messages
+        (setq result messages)))
     (should (equal '("1" "2" "3") (mapcar (lambda (m) (alist-get 'id m)) result)))
     (should (equal "/api/session/session/message?limit=200&cursor=a%3Db" (car paths)))))
 

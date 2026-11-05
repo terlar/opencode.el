@@ -103,9 +103,10 @@ otherwise signal it."
      (when body-p
        (list :body (json-encode body))))))
 
-(defun opencode-api--all-messages (session-id callback)
-  "Call CALLBACK with all of SESSION-ID's messages, oldest first.
-The server returns them newest first, a page at a time."
+(defun opencode-api--fetch-all-messages (session-id then &optional else)
+  "Call THEN with all of SESSION-ID's messages, oldest first.
+The server returns them newest first, a page at a time.
+Call ELSE with the error message if given and a request fails."
   (let (messages)
     (cl-labels ((fetch (cursor)
                   (opencode-api--request
@@ -115,13 +116,14 @@ The server returns them newest first, a page at a time."
                                     (concat "&cursor=" (url-hexify-string cursor))
                                   ""))
                    :raw t
+                   :else else
                    :then (lambda (result)
                            (let ((page (alist-get 'data result))
                                  (next (map-nested-elt result '(cursor next))))
                              (setq messages (append (reverse page) messages))
                              (if (and page (not (opencode--json-falsy next)))
                                  (fetch next)
-                               (funcall callback messages)))))))
+                               (funcall then messages)))))))
       (fetch nil))))
 
 (eval-and-compile
@@ -201,6 +203,16 @@ may start with :else HANDLER to handle errors."
  (post reply-form "/api/session/%s/form/%s/reply")
  (delete cancel-form "/api/session/%s/form/%s")
  (delete cancel-form-with-message "/api/session/%s/form/%s?message=%s"))
+
+(defmacro opencode-api-all-messages (args return-var &rest body)
+  "Run BODY with all of a session's messages, oldest first, bound to RETURN-VAR.
+ARGS is a list of the session id.  BODY may start with :else HANDLER to
+handle errors."
+  (declare (indent 2))
+  (let ((else (when (eq (car body) :else)
+                (prog1 (cadr body) (setq body (cddr body))))))
+    `(opencode-api--fetch-all-messages
+      ,@args (lambda (,return-var) ,@body) ,@(when else (list else)))))
 
 (provide 'opencode-api)
 ;;; opencode-api.el ends here
