@@ -129,8 +129,6 @@ Shortcuts to act on the session at point:
 |   <c>    |                                                                                             |
 |    =x=     | kill session                                                                                |
 |    =R=     | rename session                                                                              |
-|    =s=     | share session, copies a URL to the clipboard that will give a read-only view of the session |
-|    =u=     | unshare session                                                                             |
 | =RET= or =o= | open the session                                                                            |
 
 Buffer-wide shortcuts:
@@ -140,7 +138,6 @@ Buffer-wide shortcuts:
 | <c> |                                                    |
 |  =n=  | new session                                        |
 |  =M=  | toggle MCP - fuzzy completes on all available MCPs |
-|  =U=  | unshare all shared sessions for this project       |
 |  =v=  | toggle verbose - whether to show subagent sessions |
 
 * Chat Sessions
@@ -178,14 +175,10 @@ to expand everything.
 |     =C-c f=      | select a file to add to context, if called with a prefix argument then select a directory                                                                                                                       |
 |     =C-c b=      | select a buffer to add to context                                                                                                                                                                               |
 | =M-x yank-media= | add an image from clipboard to context                                                                                                                                                                          |
-|     =C-c s=      | share session - copy a URL to the clipboard with a read-only view of the session                                                                                                                                |
-|     =C-c u=      | unshare session                                                                                                                                                                                                 |
-|     =C-c U=      | unshare all sessions                                                                                                                                                                                            |
 |     =C-c m=      | select model                                                                                                                                                                                                    |
 |     =C-c v=      | select model variant                                                                                                                                                                                            |
 |     =C-c M=      | select an MCP to toggle                                                                                                                                                                                         |
 |     =C-c F=      | fork session from message at point - use this when a model responds badly to avoid polluting context with the bad response                                                                                      |
-|     =C-c D=      | delete a message (user prompt and assistant response) from context                                                                                                                                              |
 |     =C-c R=      | revert all edits done by this session after the message at point                                                                                                                                                |
 |       =/=        | when at the start of a user prompt, select a slash command to run                                                                                                                                               |
 |       =@=        | reference a sub-agent                                                                                                                                                                                           |
@@ -264,7 +257,7 @@ fix, and set both =comint-scroll-show-maximum-output= and
 - =opencode-command= and =opencode-serve-command= can be used to configure how to
   run a headless opencode server
 - =opencode-host= and =opencode-port= are the default host and port to use with =M-x opencode-connect=
-- =opencode-server-username= and =opencode-server-password= configure how to authenticate to the opencode server
+- =opencode-server-password= configures how to authenticate to the opencode server
 - the =opencode-faces= group configures faces used when displaying sessions
 - =opencode-toast-function= is used to show toast notifications
 - =opencode-file-edited-functions= is a hook run after edit tool calls
@@ -276,7 +269,7 @@ fix, and set both =comint-scroll-show-maximum-output= and
 - =opencode-session-deleted-functions= is a hook run when a session is deleted
 - =opencode-tool-formatters= can be used to control how tools are displayed
 - =opencode-shown-outputs= lists what to show unfolded: =reasoning=, tool
-names like =bash= or =edit=, or =bash-non-zero= to show bash output only when the
+names like =shell= or =edit=, or =shell-non-zero= to show shell tool output only when the
 command failed. Shell commands you run yourself are always shown. Shown outputs
 can still be folded the same way.
 
