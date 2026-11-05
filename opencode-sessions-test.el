@@ -823,8 +823,7 @@ Call ids are only unique within a step, so they're keyed with the message too."
 (ert-deftest opencode-open-project-buffers-test ()
   "A control buffer is named after the main checkout of its project."
   (let (opencode--session-control-buffers buffers)
-    (cl-letf* (((symbol-function 'opencode--download-slash-commands) #'ignore)
-               ((symbol-function 'opencode-sessions-redisplay) #'ignore)
+    (cl-letf* (((symbol-function 'opencode-sessions-redisplay) #'ignore)
                ((symbol-function 'pop-to-buffer)
                 (lambda (buffer) (push buffer buffers)))
                ((symbol-function 'opencode-api--request)

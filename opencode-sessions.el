@@ -346,6 +346,16 @@ Each element is (display-name model-ref provider-id)."
         parent
       (opencode-open-session parent))))
 
+(defun opencode--download-slash-commands (directory &optional force)
+  "Download slash commands for DIRECTORY, unless already downloaded or FORCE."
+  (setf directory (opencode--normalize-directory directory))
+  (when (or force (not (assoc directory opencode--slash-commands-by-directory)))
+    (let ((default-directory directory))
+      (opencode-api-commands commands
+        (setf (alist-get directory opencode--slash-commands-by-directory
+                         nil nil #'string=)
+              commands)))))
+
 (defun opencode-insert-slash-command ()
   "Insert an opencode slash command."
   (interactive)
@@ -1575,6 +1585,7 @@ If CALLBACK is given, it will be called with the session after it is initialized
                                                        opencode-session-agents))
                   mode-line-process '(:eval (opencode--session-status-indicator)))
             (hack-dir-local-variables-non-file-buffer)
+            (opencode--download-slash-commands default-directory)
             (puthash .id buffer opencode-session-buffers)
             (let ((proc (start-process "dummy" buffer nil)))
               (set-process-query-on-exit-flag proc nil)

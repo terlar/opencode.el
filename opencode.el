@@ -193,7 +193,6 @@ Call ON-CONNECT once connected."
   "Open the session control buffer for the project of DIRECTORY.
 Worktrees of a project share one, and new sessions started from it go in the
 directory it was last opened for."
-  (opencode--download-slash-commands directory)
   (let* ((directory (file-name-as-directory directory))
          (default-directory directory))
     (opencode-api-location location
@@ -496,7 +495,8 @@ Also prompts for pending questions or permissions if any."
     "session.compaction.started" "session.compaction.ended"
     "session.compaction.failed"
     "permission.asked" "permission.replied"
-    "form.created" "form.replied" "form.cancelled" "tui.toast.show")
+    "form.created" "form.replied" "form.cancelled" "tui.toast.show"
+    "command.updated")
   "Types of the events to subscribe to.")
 
 (defun opencode--redisplay-session-control-buffers ()
@@ -632,6 +632,9 @@ Also prompts for pending questions or permissions if any."
             .id .sessionID .action .metadata .resources .save .message))
           (permission.replied
            (opencode--permission-replied .sessionID .requestID .reply))
+          (command.updated
+           (opencode--slash-commands-updated
+            (map-nested-elt event '(location directory))))
           (form.created (opencode--form-request .form))
           ((form.replied form.cancelled)
            (opencode--form-settled .sessionID .id))
@@ -770,7 +773,6 @@ If INITIAL-PROMPT is given, it is sent after CALLBACK is called."
      (list :title (read-string "Title: "))))
   (opencode-autoconnect
    (lambda ()
-     (opencode--download-slash-commands default-directory)
      (opencode-api-create-session
          `((location . ((directory . ,(directory-file-name
                                        (expand-file-name default-directory)))))
@@ -861,15 +863,11 @@ If point is before the first prompt, creates a new session instead."
       _result
     (message "Restored all edits in session")))
 
-(defun opencode--download-slash-commands (directory)
-  "Download slash commands for DIRECTORY."
-  (setf directory (opencode--normalize-directory directory))
-  (unless (assoc directory opencode--slash-commands-by-directory)
-    (let ((default-directory directory))
-      (opencode-api-commands commands
-        (setf (alist-get directory opencode--slash-commands-by-directory
-                         nil nil #'string=)
-              commands)))))
+(defun opencode--slash-commands-updated (directory)
+  "Refetch the slash commands of DIRECTORY if they were downloaded."
+  (let ((directory (opencode--normalize-directory directory)))
+    (when (assoc directory opencode--slash-commands-by-directory)
+      (opencode--download-slash-commands directory t))))
 
 (provide 'opencode)
 ;;; opencode.el ends here
