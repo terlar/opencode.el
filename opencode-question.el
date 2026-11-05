@@ -13,7 +13,8 @@
 ;; Each option is a numbered key in the transient popup.  Press the key
 ;; to toggle the option.  Confirm with C-c C-c, reject with q.
 ;;
-;; The transient directly calls the server API on confirm or reject,
+;; Questions arrive as forms of the question tool, and the transient
+;; directly calls the server API on confirm or reject,
 ;; avoiding `recursive-edit' which conflicts with transient key handling.
 
 ;;; Code:
@@ -24,6 +25,8 @@
 (require 'opencode-common)
 (require 'opencode-sessions)
 
+(declare-function opencode--log-event "opencode")
+
 ;;; Per-question display state (global, since transient is not buffer-local)
 
 (defvar opencode-question--marked nil
@@ -31,6 +34,9 @@
 
 (defvar opencode-question--labels nil
   "Vector of label strings for the options.")
+
+(defvar opencode-question--values nil
+  "Vector of the values to answer with for the options.")
 
 (defvar opencode-question--descriptions nil
   "Vector of description strings for the options.")
@@ -49,8 +55,11 @@
 
 ;;; Batch state (tracks the full question sequence and accumulated answers)
 
-(defvar opencode-question--question-id nil
-  "The question ID for replying or rejecting via the server API.")
+(defvar opencode-question--session-id nil
+  "The session ID of the form being answered.")
+
+(defvar opencode-question--form-id nil
+  "The form ID for replying or rejecting via the server API.")
 
 (defvar opencode-question--questions nil
   "The full vector of question objects being asked.")
@@ -94,11 +103,27 @@
         ((< i 35) (string (+ ?a (- i 9))))
         (t (format "M-%d" (- i 35)))))
 
+(defun opencode-question--answer ()
+  "Return the form answer for the accumulated answers.
+A multiselect field takes an array, and a string field a scalar."
+  (cl-loop for selected in (reverse opencode-question--answers)
+           for question across opencode-question--questions
+           collect (cons (intern (alist-get 'key question))
+                         (if (alist-get 'multiple question)
+                             (vconcat selected)
+                           (car selected)))))
+
+(defun opencode-question--reject ()
+  "Cancel the form being answered."
+  (opencode-api-cancel-form (opencode-question--session-id opencode-question--form-id)
+      _result
+    nil))
+
 (defun opencode-question--collect ()
   "Collect currently selected labels and custom text into a list."
   (let ((selected (cl-loop for i below (length opencode-question--labels)
                            when (aref opencode-question--marked i)
-                           collect (aref opencode-question--labels i))))
+                           collect (aref opencode-question--values i))))
     (when opencode-question--custom-text
       (setq selected (append selected (list opencode-question--custom-text))))
     selected))
@@ -185,8 +210,8 @@
             (cl-incf opencode-question--current-index)
             (run-at-time 0 nil #'opencode-question--show-current))
         ;; All questions answered; send reply to server.
-        (opencode-api-reply-questions (opencode-question--question-id)
-            `((answers . ,(vconcat (nreverse opencode-question--answers))))
+        (opencode-api-reply-form (opencode-question--session-id opencode-question--form-id)
+            `((answer . ,(opencode-question--answer)))
             _result
           nil)))))
 
@@ -195,9 +220,7 @@
   :transient nil
   (interactive)
   (setq opencode-question--handled t)
-  (opencode-api-reject-questions (opencode-question--question-id)
-      _result
-    nil))
+  (opencode-question--reject))
 
 ;;; Transient exit hook
 
@@ -205,9 +228,7 @@
   "Handle transient exit by rejecting if not already confirmed or rejected."
   (remove-hook 'transient-exit-hook #'opencode-question--on-exit)
   (unless opencode-question--handled
-    (opencode-api-reject-questions (opencode-question--question-id)
-        _result
-      nil)))
+    (opencode-question--reject)))
 
 ;;; Dynamic children setup
 
@@ -244,41 +265,36 @@ _CHILDREN is the statically-defined children, which are ignored."
          (options (alist-get 'options q))
          (n (length options)))
     (setq opencode-question--labels (make-vector n nil)
+          opencode-question--values (make-vector n nil)
           opencode-question--descriptions (make-vector n nil)
           opencode-question--marked (make-vector n nil)
-          opencode-question--multiple (not (opencode--json-falsy
-                                            (alist-get 'multiple q)))
-          opencode-question--custom-enabled t
+          opencode-question--multiple (alist-get 'multiple q)
+          opencode-question--custom-enabled (alist-get 'custom q)
           opencode-question--custom-text nil
           opencode-question--question-text (alist-get 'question q)
           opencode-question--handled nil)
     (dotimes (i n)
       (let ((opt (aref options i)))
         (aset opencode-question--labels i (alist-get 'label opt))
+        (aset opencode-question--values i (alist-get 'value opt))
         (aset opencode-question--descriptions i (alist-get 'description opt))))
     (add-hook 'transient-exit-hook #'opencode-question--on-exit)
     (opencode-question--transient)))
 
-(defun opencode-question--prompt (question-id questions)
-  "Prompt user to answer QUESTIONS and reply or reject to QUESTION-ID.
-QUESTIONS is a vector of question objects with `question', `header',
-`options', and `multiple' fields.  Each option has `label' and
-`description' fields.  Displays a transient popup for each question.
+(defun opencode--prompt-questions (pending)
+  "Prompt user to answer the questions of PENDING, then reply or reject its form.
+PENDING is a plist with :session-id, :form-id and :questions, a vector of
+question objects with `key', `question', `header', `options', `multiple' and
+`custom' fields.  Each option has `value', `label' and `description' fields.
+Displays a transient popup for each question.
 On confirm, replies to the server.  On reject or dismiss, rejects."
-  (setq opencode-question--question-id question-id
-        opencode-question--questions questions
+  (setq opencode-question--session-id (plist-get pending :session-id)
+        opencode-question--form-id (plist-get pending :form-id)
+        opencode-question--questions (plist-get pending :questions)
         opencode-question--current-index 0
         opencode-question--answers nil
         opencode-question--handled nil)
   (opencode-question--show-current))
-
-(defun opencode--prompt-questions (question-id questions)
-  "Prompt user to answer QUESTIONS, then reply or reject to QUESTION-ID.
-QUESTIONS is a vector of question objects with `question', `header',
-`options', and `multiple' fields.  Each option has `label' and
-`description' fields.  Displays a transient popup for each question.
-On confirm, replies to the server.  On reject or dismiss, rejects."
-  (opencode-question--prompt question-id questions))
 
 (defun opencode--output-questions (buffer questions)
   "Output QUESTIONS to BUFFER with ❓ prefix for each question."
@@ -289,29 +305,70 @@ On confirm, replies to the server.  On reject or dismiss, rejects."
       (opencode--output (opencode--format-questions questions))
       (opencode--output "\n"))))
 
-(defun opencode--queue-questions (buffer question-id questions)
-  "Queue QUESTION-ID with QUESTIONS in BUFFER and prompt if active."
-  (opencode--output-questions buffer questions)
-  (if (opencode--buffer-active-p buffer)
-      (opencode--prompt-questions question-id questions)
-    (opencode--toast-show `((title . "OpenCode Questions")
-                            (message . ,(alist-get 'question (aref questions 0)))
-                            (variant . "info")))
-    (with-current-buffer buffer
-      (setq opencode-session-pending-questions
-            (cons question-id questions)))))
+(defun opencode--queue-questions (buffer pending)
+  "Queue the questions PENDING in BUFFER and prompt if active."
+  (let ((questions (plist-get pending :questions)))
+    (opencode--output-questions buffer questions)
+    (if (opencode--buffer-active-p buffer)
+        (opencode--prompt-questions pending)
+      (opencode--toast-show `((title . "OpenCode Questions")
+                              (message . ,(alist-get 'question (aref questions 0)))
+                              (variant . "info")))
+      (with-current-buffer buffer
+        (setq opencode-session-pending-questions pending)))))
 
-(defun opencode--question-request (question-id session-id questions)
-  "Handle QUESTION-ID with QUESTIONS for SESSION-ID.
-Ensures the session buffer exists so pending questions are not dropped."
-  (if-let* ((buffer (gethash session-id opencode-session-buffers)))
-      (opencode--queue-questions buffer question-id questions)
-    (opencode-api-session (session-id)
-        session
-      (push session opencode-alerted-sessions)
-      (opencode-open-session session)
-      (when-let* ((buffer (gethash session-id opencode-session-buffers)))
-        (opencode--queue-questions buffer question-id questions)))))
+(defun opencode--form-questions (form)
+  "Return the vector of question objects for the fields of a question FORM."
+  (vconcat
+   (mapcar (lambda (field)
+             (let-alist field
+               `((key . ,.key)
+                 (question . ,.description)
+                 (header . ,.title)
+                 (options . ,(vconcat .options))
+                 (multiple . ,(equal .type "multiselect"))
+                 (custom . ,(not (opencode--json-falsy .custom))))))
+           (alist-get 'fields form))))
+
+(defun opencode--cancel-unsupported-form (form)
+  "Tell the user FORM can't be displayed, and cancel it so the session won't hang."
+  (let-alist form
+    (opencode--toast-show `((title . "OpenCode Form")
+                            (message . ,(format "Can't display form: %s" .title))
+                            (variant . "warning")))
+    (opencode-api--request
+     'delete (format "/api/session/%s/form/%s?message=%s" .sessionID .id
+                     (url-hexify-string "opencode.el can't display this form"))
+     :else (lambda (error-msg)
+             (opencode--log-event "WARNING FORM CANCEL" error-msg)))))
+
+(defun opencode--form-request (form)
+  "Handle FORM, a Form.Info.
+Ensures the session buffer exists so pending questions are not dropped,
+which fetches and queues its pending forms once it's displayed."
+  (let-alist form
+    (if (not (equal .metadata.kind "question"))
+        (opencode--cancel-unsupported-form form)
+      (if-let* ((buffer (gethash .sessionID opencode-session-buffers))
+                ((buffer-live-p buffer)))
+          (unless (equal .id (plist-get (buffer-local-value
+                                         'opencode-session-pending-questions buffer)
+                                        :form-id))
+            (opencode--queue-questions
+             buffer
+             (list :session-id .sessionID
+                   :form-id .id
+                   :questions (opencode--form-questions form))))
+        (opencode-api-session (.sessionID)
+            session
+          (push session opencode-alerted-sessions)
+          (opencode-open-session session))))))
+
+(defun opencode--form-settled (session-id form-id)
+  "Clear the pending form FORM-ID of SESSION-ID, which was answered or cancelled."
+  (opencode--with-session-buffer session-id
+    (when (equal form-id (plist-get opencode-session-pending-questions :form-id))
+      (setq opencode-session-pending-questions nil))))
 
 (provide 'opencode-question)
 ;;; opencode-question.el ends here

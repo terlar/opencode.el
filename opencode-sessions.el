@@ -124,7 +124,7 @@ Buffer local so we can configure models and variants per agent per session.")
 
 (defvar-local opencode-session-pending-questions nil
   "Pending questions for this session buffer, awaiting user response.
-When non-nil, contains a cons cell (QUESTION-ID . QUESTIONS-VECTOR).")
+When non-nil, a plist of :session-id, :form-id and :questions, a vector.")
 
 (defvar-local opencode-session-pending-permission nil
   "Pending permission requests for this session buffer, as a list of plists.

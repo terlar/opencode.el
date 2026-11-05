@@ -470,7 +470,7 @@ Also prompts for pending questions or permissions if any."
       (when opencode-session-pending-questions
         (let ((pending opencode-session-pending-questions))
           (setq opencode-session-pending-questions nil)
-          (opencode--prompt-questions (car pending) (cdr pending))))
+          (opencode--prompt-questions pending)))
       ;; Handle pending permissions when buffer becomes active
       (when opencode-session-pending-permission
         (run-at-time 0 nil #'opencode-respond-permission)))))
