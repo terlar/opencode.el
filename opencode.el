@@ -185,7 +185,7 @@ Call ON-CONNECT once connected."
     (user-error "Already connected"))
   (setq opencode-api-url (format "http://%s:%d" host port))
   (setq opencode--slash-commands-by-directory nil)
-  (opencode--subscribe-global-events)
+  (opencode--subscribe-events)
   (opencode--fetch-models (lambda () (opencode--fetch-agents on-connect)))
   (message "Connected to %s" opencode-api-url))
 
@@ -640,7 +640,7 @@ Also prompts for pending questions or permissions if any."
            (opencode--form-settled .sessionID .id))
           (otherwise (opencode--log-event "WARNING" "unhandled message type")))))))
 
-(defun opencode--handle-global-event (event)
+(defun opencode--handle-event (event)
   "Handle EVENT from the opencode server's event stream."
   (let* ((data (json-parse-string (plz-event-source-event-data event)
                                   :array-type 'list
@@ -668,8 +668,8 @@ Also prompts for pending questions or permissions if any."
 (defvar opencode--stream-retry-timer nil
   "Timer for the next attempt to resubscribe.")
 
-(defun opencode--subscribe-global-events ()
-  "Subscribe to the global opencode event stream."
+(defun opencode--subscribe-events ()
+  "Subscribe to the opencode event stream."
   (let* (stream
          (ended (lambda (&optional event)
                   (when (eq stream opencode--event-subscription)
@@ -683,7 +683,7 @@ Also prompts for pending questions or permissions if any."
                            . ,(plz-event-source:text/event-stream
                                :events `((open . ,(lambda (event)
                                                     (opencode--log-event "OPEN" event)))
-                                         (message . opencode--handle-global-event)
+                                         (message . opencode--handle-event)
                                          (close . ,ended))))))
                    :headers (delq nil (list (opencode--auth-header)))
                    :then ended
@@ -706,7 +706,7 @@ The server may still be fine, so it's left running."
           (message "Lost connection to opencode at %s" opencode-api-url))
       (cl-decf opencode--stream-retries-left)
       (setq opencode--stream-retry-timer
-            (run-at-time 2 nil #'opencode--subscribe-global-events)))))
+            (run-at-time 2 nil #'opencode--subscribe-events)))))
 
 (defun opencode--stream-connected ()
   "Handle the event stream connecting, rebuilding what it missed if recovering."
