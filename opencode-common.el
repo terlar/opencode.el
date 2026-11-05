@@ -30,6 +30,9 @@ When nil or not available, connecting sets it to the server's default model.")
 (defvar opencode--slash-commands-by-directory nil
   "Alist mapping normalized project directories to available slash commands.")
 
+(defvar opencode--location-by-directory nil
+  "Alist mapping normalized directories to their opencode location.")
+
 (defvar opencode-alerted-sessions nil
   "List of unvisited idle sessions.")
 

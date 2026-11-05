@@ -232,13 +232,14 @@ Accepts (\"name\" . buffer) to work as a read-buffer predicate."
   (interactive)
   (opencode-autoconnect
    (lambda ()
-     (opencode-api-location location
-       (opencode-api-root-sessions-for-project ((map-nested-elt location '(project id)))
-           sessions
-         (opencode--select-sessions "Session: "
-                                    sessions
-                                    (format "No sessions in %s" default-directory)
-                                    :pop-to-buffer nil))))))
+     (opencode-api--cached-location
+      (lambda (location)
+        (opencode-api-root-sessions-for-project ((map-nested-elt location '(project id)))
+            sessions
+          (opencode--select-sessions "Session: "
+                                     sessions
+                                     (format "No sessions in %s" default-directory)
+                                     :pop-to-buffer nil)))))))
 
 (cl-defun opencode--select-sessions (prompt sessions no-sessions-message &key (pop-to-buffer t))
   "Select a session from SESSIONS to open.

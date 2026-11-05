@@ -170,6 +170,7 @@ may start with :else HANDLER to handle errors."
 (opencode-api--define-wrappers
  (info "/api/info")
  (location "/api/location")
+ (post nodata reload-locations "/api/location/reload")
  (projects "/api/project")
  (models "/api/model")
  (default-model "/api/model/default")
@@ -213,6 +214,20 @@ handle errors."
                 (prog1 (cadr body) (setq body (cddr body))))))
     `(opencode-api--fetch-all-messages
       ,@args (lambda (,return-var) ,@body) ,@(when else (list else)))))
+
+(defun opencode-api--cached-location (then)
+  "Call THEN with the location of `default-directory'.
+Only the first call for a directory requests it from the server, which also
+caches it until `opencode-reload-locations'."
+  (let ((directory (directory-file-name (expand-file-name default-directory))))
+    (if-let* ((location (alist-get directory opencode--location-by-directory
+                                   nil nil #'equal)))
+        (funcall then location)
+      (opencode-api-location location
+        (setf (alist-get directory opencode--location-by-directory
+                         nil nil #'equal)
+              location)
+        (funcall then location)))))
 
 (provide 'opencode-api)
 ;;; opencode-api.el ends here

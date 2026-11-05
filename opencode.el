@@ -184,7 +184,8 @@ Call ON-CONNECT once connected."
   (when opencode--event-subscription
     (user-error "Already connected"))
   (setq opencode-api-url (format "http://%s:%d" host port))
-  (setq opencode--slash-commands-by-directory nil)
+  (setq opencode--slash-commands-by-directory nil
+        opencode--location-by-directory nil)
   (opencode--subscribe-events)
   (opencode--fetch-models (lambda () (opencode--fetch-agents on-connect)))
   (message "Connected to %s" opencode-api-url))
@@ -195,22 +196,36 @@ Worktrees of a project share one, and new sessions started from it go in the
 directory it was last opened for."
   (let* ((directory (file-name-as-directory directory))
          (default-directory directory))
-    (opencode-api-location location
-      (let-alist location
-        (with-current-buffer
-            (get-buffer-create
-             (format "*OpenCode Sessions: %s*"
-                     (if (equal .project.id "global")
-                         "global"
-                       (file-name-nondirectory
-                        (directory-file-name .project.canonical)))))
-          (unless (derived-mode-p 'opencode-session-control-mode)
-            (opencode-session-control-mode)
-            (push (current-buffer) opencode--session-control-buffers))
-          (setq default-directory directory
-                opencode-session-control-project-id .project.id)
-          (opencode-sessions-redisplay)
-          (pop-to-buffer (current-buffer)))))))
+    (opencode-api--cached-location
+     (lambda (location)
+       (let-alist location
+         (with-current-buffer
+             (get-buffer-create
+              (format "*OpenCode Sessions: %s*"
+                      (if (equal .project.id "global")
+                          "global"
+                        (file-name-nondirectory
+                         (directory-file-name .project.canonical)))))
+           (unless (derived-mode-p 'opencode-session-control-mode)
+             (opencode-session-control-mode)
+             (push (current-buffer) opencode--session-control-buffers))
+           (setq default-directory directory
+                 opencode-session-control-project-id .project.id)
+           (opencode-sessions-redisplay)
+           (pop-to-buffer (current-buffer))))))))
+
+(defun opencode-reload-locations ()
+  "Make the server resolve the project of each directory again.
+Run this after a directory's project changes, such as on `git init', its
+first commit or adding a remote."
+  (interactive)
+  (opencode-api-reload-locations _
+    :else (lambda (error-msg)
+            ;; It still reloads the others when a directory's been deleted
+            (setq opencode--location-by-directory nil)
+            (message "%s" error-msg))
+    (setq opencode--location-by-directory nil)
+    (message "Reloaded opencode locations")))
 
 (defvar opencode-worktree-directory (expand-file-name "~/opencode_worktrees/")
   "Directory to store worktrees created for opencode.")
@@ -736,7 +751,8 @@ The server may still be fine, so it's left running."
     (kill-process opencode--process))
   (setq opencode--stream-retries-left nil
         opencode--stream-retry-timer nil
-        opencode--slash-commands-by-directory nil))
+        opencode--slash-commands-by-directory nil
+        opencode--location-by-directory nil))
 
 (defun opencode--fetch-models (callback)
   "Fetch enabled models and the default model from server.
