@@ -19,9 +19,9 @@
 (require 'project)
 (require 'savehist)
 
-(defvar opencode-last-model '((providerID . "opencode")
-                              (modelID . "big-pickle"))
-  "Last model used.")
+(defvar opencode-last-model nil
+  "Last model used, as a Model.Ref alist of id, providerID and optional variant.
+When nil or not available, connecting sets it to the server's default model.")
 (add-to-list 'savehist-additional-variables 'opencode-last-model)
 
 (defvar opencode-agents nil
@@ -30,23 +30,23 @@
 (defvar opencode--slash-commands-by-directory nil
   "Alist mapping normalized project directories to available slash commands.")
 
+(defvar opencode--location-by-directory nil
+  "Alist mapping normalized directories to their opencode location.")
+
 (defvar opencode-alerted-sessions nil
   "List of unvisited idle sessions.")
 
 (defvar opencode-last-session-buffer nil
   "Last active opencode session buffer.")
 
-(defvar opencode-providers nil
-  "List of available providers and models.")
-
-(defvar opencode-part-type (make-hash-table :test 'equal)
-  "Mapping of part id's to their type.")
+(defvar opencode-models nil
+  "List of enabled models.")
 
 (defvar opencode--event-subscription nil
   "SSE event process for the global event stream.")
 
 (defvar opencode--session-control-buffers nil
-  "An alist mapping of projectIDs to session control buffers for that project.")
+  "List of session control buffers.")
 
 (defun opencode--normalize-directory (directory)
   "Return DIRECTORY as a canonical directory name."
@@ -78,11 +78,6 @@ for title, message, variant (error/warning/info/success), and duration"
   :type 'function
   :group 'opencode)
 
-(defcustom opencode-server-username "opencode"
-  "Username to connect to opencode server."
-  :type 'string
-  :group 'opencode)
-
 (defcustom opencode-server-password nil
   "Password to connect to opencode server."
   :type 'string
@@ -93,7 +88,7 @@ for title, message, variant (error/warning/info/success), and duration"
     opencode--reload-elisp-file)
   "Hook run after opencode edits a file.
 This is an abnormal hook.  Each function receives two arguments, FILE and
-RANGES, after a completed write, edit, or apply_patch tool call.  FILE is the
+RANGES, after a completed write, edit, or patch tool call.  FILE is the
 edited file path.  RANGES is a list of (START-LINE . END-LINE) cons cells in
 the post-edit file, or nil when the whole file was written.  For deletion-only
 edits, END-LINE is nil."
@@ -105,7 +100,7 @@ edits, END-LINE is nil."
     opencode--flycheck-edited-files)
   "Run hooks after opencode finishes editing files.
 This is an abnormal hook.  Each entry receives one argument, FILES,
-the list of file paths from completed write, edit, or apply_patch tool calls.
+the list of file paths from completed write, edit, or patch tool calls.
 Hooks run when the session becomes idle.  Hooks that finish
 synchronously can just return.  Hooks that finish asynchronously must
 return `:opencode-async' and call `opencode-hook-finished' when done.
@@ -125,7 +120,7 @@ Designed to be set in `.dir-locals.el'"
 
 (defconst opencode--apply-patch-file-header-regexp
   "^\\*\\*\\* \\(Add File\\|Update File\\|Delete File\\): \\(.*\\)$"
-  "Regexp matching file operation headers in apply_patch input.")
+  "Regexp matching file operation headers in patch tool input.")
 
 (defun opencode--time-ago (opencode-object type)
   "Return .time.TYPE value from OPENCODE-OBJECT, as seconds ago.
@@ -141,9 +136,9 @@ Returns \"-\" if SECONDS is nil."
     "-"))
 
 (defun opencode--json-falsy (value)
-  "Return t if VALUE is null, :null, or 0."
+  "Return t if VALUE is null, :null, :false, or 0."
   (cl-case value
-    ((nil :null 0) t)
+    ((nil :null :false 0) t)
     (t nil)))
 
 (defun opencode--truncate-at-max-lines (max-lines)

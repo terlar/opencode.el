@@ -256,5 +256,21 @@ This also uses a bare empty line inside the hunk."
 ")
     '(( "dir/file name [draft] #1 \"quoted\".txt" . ((2 . 2)))))))
 
+(ert-deftest opencode-diff-parser-two-files-patch-header-test ()
+  "Parse the patches of the v2 server, which have an Index line and no prefixes."
+  (should
+   (equal
+    (opencode-diff->source-line-ranges
+     (concat "Index: dir/a.txt\n"
+             "===================================================================\n"
+             "--- dir/a.txt\n"
+             "+++ dir/a.txt\n"
+             "@@ -1,3 +1,3 @@\n"
+             " one\n"
+             "-two\n"
+             "+three\n"
+             " four\n"))
+    '(("dir/a.txt" (2 . 2))))))
+
 (provide 'opencode-diff-parser-test)
 ;;; opencode-diff-parser-test.el ends here

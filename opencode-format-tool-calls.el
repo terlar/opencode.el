@@ -39,23 +39,23 @@ BODY is evaluated inside `(let-alist tool-args ...)'."
                ,@body)))))
 
 (opencode-define-tool-formatter "edit"
-  (concat "✏ edit " .filePath ":\n"
+  (concat "✏ edit " .path ":\n"
           (opencode--fenced-block
            (opencode--format-edit-diff .oldString .newString) "diff")))
 
-(opencode-define-tool-formatter "apply_patch"
-  (concat "✏ apply_patch:\n"
+(opencode-define-tool-formatter "patch"
+  (concat "✏ patch:\n"
           (opencode--fenced-block
            (opencode--format-apply-patch .patchText) "diff")))
 
 (opencode-define-tool-formatter "write"
-  (format "📝 write %s" .filePath))
+  (format "📝 write %s" .path))
 
 (opencode-define-tool-formatter "read"
   (if (and .offset .limit)
       (format "📖 read `%s:%d` limit=%d"
-              .filePath .offset .limit)
-    (format "read %s" .filePath)))
+              .path .offset .limit)
+    (format "read %s" .path)))
 
 (opencode-define-tool-formatter "grep"
   (concat
@@ -63,16 +63,11 @@ BODY is evaluated inside `(let-alist tool-args ...)'."
    (when (or .include .path)
      (format " in %s" (or .include .path)))))
 
-(opencode-define-tool-formatter "bash"
-  (concat (when .description
-            (format "# %s\n" .description))
-          (format "$ %s" .command)))
+(opencode-define-tool-formatter "shell"
+  (format "$ %s" .command))
 
 (opencode-define-tool-formatter "websearch"
   (format "🌐 websearch \"%s\"" .query))
-
-(opencode-define-tool-formatter "call_omo_agent"
-  (format "🤖 call_omo_agent: %s\n\n%s" .description .prompt))
 
 (opencode-define-tool-formatter "glob"
   (if .path
@@ -87,33 +82,39 @@ BODY is evaluated inside `(let-alist tool-args ...)'."
 (opencode-define-tool-formatter "question"
   (opencode--format-questions .questions))
 
-(opencode-define-tool-formatter "task"
-  (if (string= "explore" .subagent_type)
+(opencode-define-tool-formatter "subagent"
+  (if (string= "explore" .agent)
       (format "🔍 Explore: %s" .description)
     (format "🤖 Subagent Task: %s" .description)))
 
 (defun opencode--format-tool-call (tool input)
-  "Format TOOL call with INPUT arguments for display."
-  (when (alist-get 'filePath input)
-    (setf (alist-get 'filePath input) (opencode--relative-path-for-display (alist-get 'filePath input))))
+  "Format TOOL call with INPUT arguments for display.
+A call with no INPUT, as when it was malformed, shows just the tool name."
+  (when (alist-get 'path input)
+    (setq input (copy-alist input))
+    (setf (alist-get 'path input) (opencode--relative-path-for-display (alist-get 'path input))))
 
-  (if-let* ((tool-formatter (cdr (assoc-string tool opencode-tool-formatters))))
+  (if-let* ((tool-formatter (and input
+                                 (cdr (assoc-string tool opencode-tool-formatters)))))
       (funcall tool-formatter input)
-    (if (= 1 (length input))
-        (let ((arg (cdar input)))
-          (format "%s%s%s"
-                  tool
-                  (if (string-match-p "\n" arg)
-                      "\n"
-                    " ")
-                  arg))
-      ;; Multiple arguments: tool-name, then arg-name: value per line
+    (cond
+     ((null input) tool)
+     ((= 1 (length input))
+      (let ((arg (format "%s" (cdar input))))
+        (format "%s%s%s"
+                tool
+                (if (string-match-p "\n" arg)
+                    "\n"
+                  " ")
+                arg)))
+     ;; Multiple arguments: tool-name, then arg-name: value per line
+     (t
       (concat tool " ("
               (mapconcat (lambda (pair)
                            (format "%s=%s" (car pair) (cdr pair)))
                          input
                          ", ")
-              ")"))))
+              ")")))))
 
 (defun opencode--format-todos (todos)
   "Return TODOS as a markdown todo list."
@@ -157,7 +158,7 @@ BODY is evaluated inside `(let-alist tool-args ...)'."
               (buffer-string))))))))
 
 (defun opencode--format-apply-patch (patch-text)
-  "Return PATCH-TEXT formatted for `apply_patch' display."
+  "Return PATCH-TEXT formatted for `patch' tool display."
   (with-temp-buffer
     (insert patch-text)
     (goto-char (point-min))

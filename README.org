@@ -112,7 +112,9 @@ different project. Different git worktrees for the same repository will be
 grouped in the same project. Sessions started in directories outside of any git
 repository will go in the global =/= project. =opencode-select-project= will fuzzy
 complete on all projects and open the [[#6679896c-5b9d-4e87-9e03-6ed060dec278][Session Management]] buffer for the project
-you select.
+you select. When creating a new git repository or adding a git remote, you need
+to run =opencode-reload-locations= for the OpenCode server to pick up the changed
+project.
 
 * Session Management
 :PROPERTIES:
@@ -129,8 +131,6 @@ Shortcuts to act on the session at point:
 |   <c>    |                                                                                             |
 |    =x=     | kill session                                                                                |
 |    =R=     | rename session                                                                              |
-|    =s=     | share session, copies a URL to the clipboard that will give a read-only view of the session |
-|    =u=     | unshare session                                                                             |
 | =RET= or =o= | open the session                                                                            |
 
 Buffer-wide shortcuts:
@@ -140,7 +140,6 @@ Buffer-wide shortcuts:
 | <c> |                                                    |
 |  =n=  | new session                                        |
 |  =M=  | toggle MCP - fuzzy completes on all available MCPs |
-|  =U=  | unshare all shared sessions for this project       |
 |  =v=  | toggle verbose - whether to show subagent sessions |
 
 * Chat Sessions
@@ -178,14 +177,10 @@ to expand everything.
 |     =C-c f=      | select a file to add to context, if called with a prefix argument then select a directory                                                                                                                       |
 |     =C-c b=      | select a buffer to add to context                                                                                                                                                                               |
 | =M-x yank-media= | add an image from clipboard to context                                                                                                                                                                          |
-|     =C-c s=      | share session - copy a URL to the clipboard with a read-only view of the session                                                                                                                                |
-|     =C-c u=      | unshare session                                                                                                                                                                                                 |
-|     =C-c U=      | unshare all sessions                                                                                                                                                                                            |
 |     =C-c m=      | select model                                                                                                                                                                                                    |
 |     =C-c v=      | select model variant                                                                                                                                                                                            |
 |     =C-c M=      | select an MCP to toggle                                                                                                                                                                                         |
 |     =C-c F=      | fork session from message at point - use this when a model responds badly to avoid polluting context with the bad response                                                                                      |
-|     =C-c D=      | delete a message (user prompt and assistant response) from context                                                                                                                                              |
 |     =C-c R=      | revert all edits done by this session after the message at point                                                                                                                                                |
 |       =/=        | when at the start of a user prompt, select a slash command to run                                                                                                                                               |
 |       =@=        | reference a sub-agent                                                                                                                                                                                           |
@@ -200,27 +195,28 @@ If a session buffer and frame is not active, emacs will show a notification when
                           opencode-new-worktree opencode-new-session
                           opencode-select-idle opencode-visit-last-idle
                           opencode-add-file-dwim opencode-add-region opencode-add-buffer-dwim
-                          opencode-fix-flycheck)
+                          opencode-fix-flycheck opencode-reload-locations)
          collect (list command
                        (string-join (string-lines (documentation command)) " ")))
 #+end_src
 
 #+RESULTS:
-| Command                      | Description                                                                                                                                                                                                                                          |
-|------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| opencode                     | Open opencode sessions control buffer for the current project directory. Connects to an existing server if one is running, otherwise starts a new one if ‘opencode-auto-start-server’ is non-nil.                                                    |
-| opencode-connect             | Connect to opencode server, prompting for HOST and PORT. Call ON-CONNECT once connected.                                                                                                                                                             |
-| opencode-disconnect          | Disconnect from opencode server, optionally log EVENT.                                                                                                                                                                                               |
-| opencode-select-project      | Completing read to prompt which project to select.                                                                                                                                                                                                   |
-| opencode-select-open-session | Select among open session buffers.                                                                                                                                                                                                                   |
-| opencode-new-worktree        | Create a new git branch, and worktree prompting for a name. Then open an opencode session in it.                                                                                                                                                     |
-| opencode-new-session         | Create a new session. With a prefix argument it will ask for TITLE. Without it will use a default title and then automatically generate one. If CALLBACK is given, it will be called with the session after it is created.  (fn &key TITLE CALLBACK) |
-| opencode-select-idle         | Select a session that hasn’t been visited since it went idle.                                                                                                                                                                                        |
-| opencode-visit-last-idle     | Open the most recent session to notify as idle.                                                                                                                                                                                                      |
-| opencode-add-file-dwim       | If in Dired, add all marked files, or file at point if none marked. Otherwise add the current buffer’s file. Otherwise prompt for file in current project.                                                                                           |
-| opencode-add-region          | Add the active region to context.                                                                                                                                                                                                                    |
-| opencode-add-buffer-dwim     | Add current buffer or prompt for one to add.                                                                                                                                                                                                         |
-| opencode-fix-flycheck        | Start a new opencode session to fix the current buffer’s Flycheck errors.                                                                                                                                                                            |
+| Command                      | Description                                                                                                                                                                                                                                                                                                                          |
+|------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| opencode                     | Open opencode sessions control buffer for the current project directory. Connects to an existing server if one is running, otherwise starts a new one if ‘opencode-auto-start-server’ is non-nil.                                                                                                                                    |
+| opencode-connect             | Connect to opencode server, prompting for HOST and PORT. Call ON-CONNECT once connected.                                                                                                                                                                                                                                             |
+| opencode-disconnect          | Disconnect from opencode server, optionally log EVENT.                                                                                                                                                                                                                                                                               |
+| opencode-select-project      | Completing read to prompt which project to select.                                                                                                                                                                                                                                                                                   |
+| opencode-select-open-session | Select among open session buffers.                                                                                                                                                                                                                                                                                                   |
+| opencode-new-worktree        | Create a new git branch, and worktree prompting for a name. Then open an opencode session in it.                                                                                                                                                                                                                                     |
+| opencode-new-session         | Create a new session. With a prefix argument it will ask for TITLE. Without it will use a default title and then automatically generate one. If CALLBACK is given, it will be called with the session after it is created. If INITIAL-PROMPT is given, it is sent after CALLBACK is called.  (fn &key TITLE CALLBACK INITIAL-PROMPT) |
+| opencode-select-idle         | Select a session that hasn’t been visited since it went idle.                                                                                                                                                                                                                                                                        |
+| opencode-visit-last-idle     | Open the most recent session to notify as idle.                                                                                                                                                                                                                                                                                      |
+| opencode-add-file-dwim       | If in Dired, add all marked files, or file at point if none marked. Otherwise add the current buffer’s file. Otherwise prompt for file in current project.                                                                                                                                                                           |
+| opencode-add-region          | Add the active region to context.                                                                                                                                                                                                                                                                                                    |
+| opencode-add-buffer-dwim     | Add current buffer or prompt for one to add.                                                                                                                                                                                                                                                                                         |
+| opencode-fix-flycheck        | Start a new opencode session to fix the current buffer’s Flycheck errors.                                                                                                                                                                                                                                                            |
+| opencode-reload-locations    | Make the server resolve the project of each directory again. Run this after a directory’s project changes, such as on ‘git init’, its first commit or adding a remote.                                                                                                                                                               |
 
 * Question Tool
 #+CAPTION: Single choice question
@@ -264,7 +260,7 @@ fix, and set both =comint-scroll-show-maximum-output= and
 - =opencode-command= and =opencode-serve-command= can be used to configure how to
   run a headless opencode server
 - =opencode-host= and =opencode-port= are the default host and port to use with =M-x opencode-connect=
-- =opencode-server-username= and =opencode-server-password= configure how to authenticate to the opencode server
+- =opencode-server-password= configures how to authenticate to the opencode server
 - the =opencode-faces= group configures faces used when displaying sessions
 - =opencode-toast-function= is used to show toast notifications
 - =opencode-file-edited-functions= is a hook run after edit tool calls
@@ -276,7 +272,7 @@ fix, and set both =comint-scroll-show-maximum-output= and
 - =opencode-session-deleted-functions= is a hook run when a session is deleted
 - =opencode-tool-formatters= can be used to control how tools are displayed
 - =opencode-shown-outputs= lists what to show unfolded: =reasoning=, tool
-names like =bash= or =edit=, or =bash-non-zero= to show bash output only when the
+names like =shell= or =edit=, or =shell-non-zero= to show shell tool output only when the
 command failed. Shell commands you run yourself are always shown. Shown outputs
 can still be folded the same way.
 
