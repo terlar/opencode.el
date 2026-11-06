@@ -36,8 +36,22 @@ Shown outputs can still be folded manually with `hs-toggle-hiding'."
                          (symbol :tag "Tool name")))
   :group 'opencode)
 
+(defun opencode--session-control-command (fun)
+  "Return a command that calls FUN with the session at point."
+  (lambda ()
+    (:documentation (format "Call `%s' on the session at point." fun))
+    (interactive)
+    (funcall fun (or (vtable-current-object)
+                     (user-error "No session at point")))))
+
 (defvar opencode-session-control-mode-map
   (define-keymap
+    ;; needed here instead of vtable :actions, as emojify-mode keymap was taking
+    ;; precedence over vtable's keymap
+    "RET" (opencode--session-control-command #'opencode-open-session-same-window)
+    "o" (opencode--session-control-command #'opencode-open-session-same-window)
+    "R" (opencode--session-control-command #'opencode-rename-session)
+    "x" (opencode--session-control-command #'opencode-kill-session)
     "r" 'opencode-sessions-redisplay
     "g" nil
     "SPC" nil
@@ -90,8 +104,14 @@ Shown outputs can still be folded manually with `hs-toggle-hiding'."
 (with-eval-after-load 'evil
   (declare-function evil-define-key* "evil-core")
   (evil-define-key* 'normal opencode-session-control-mode-map
+    (kbd "RET") (opencode--session-control-command #'opencode-open-session)
+    "o" (opencode--session-control-command #'opencode-open-session)
+    "R" (opencode--session-control-command #'opencode-rename-session)
+    "x" (opencode--session-control-command #'opencode-kill-session)
     "r" 'opencode-sessions-redisplay
     "n" 'opencode-new-session
+    "M" 'opencode-toggle-mcp
+    "v" 'opencode-session-control-toggle-verbose
     "gv" 'opencode-session-control-toggle-verbose)
   (evil-define-key* 'insert opencode-session-mode-map
     "@" 'opencode-add-subagent
@@ -405,6 +425,15 @@ Each element is (display-name model-ref provider-id)."
 (defun opencode--session-title (session)
   "Return the title of SESSION, which a new session may not have yet."
   (or (alist-get 'title session) "Untitled"))
+
+(defun opencode--session-status-icon (session)
+  "Return an icon for SESSION's execution state, or nil if nothing to show.
+A session is busy when its last execution started after the last one
+ended, like the OpenCode app's inbox."
+  (let-alist session
+    (cond ((and .time.busy (or (null .time.idle) (> .time.busy .time.idle)))
+           "⏳")
+          ((equal .outcome "failed") "❌"))))
 
 (defun opencode-session--set-status (session-id status)
   "Set STATUS for the session with SESSION-ID and update modeline."
@@ -1120,6 +1149,10 @@ send the whole block once it's done."
   (let-alist tokens
     (+ .input .output .reasoning .cache.read .cache.write)))
 
+(defun opencode--format-tokens (n)
+  "Return token count N in compact form, like 3.2k."
+  (file-size-human-readable (or n 0) 'si))
+
 (defun opencode--tool-key (message-id id)
   "Return the key of tool call ID, as they are only unique within MESSAGE-ID."
   (concat message-id "/" id))
@@ -1706,23 +1739,23 @@ Prompts are user messages and shell commands, in order."
     (erase-buffer)
     (if sessions
         (make-vtable
-         :columns '("Title"
+         :columns '((:name "Title" :max-width "50%")
                     (:name "Branch" :min-width 6)
                     (:name "Last Updated" :width 12
                      :formatter opencode--format-time-ago
                      :primary ascend)
                     (:name "Cost" :width 8 :align right)
+                    (:name "Tokens")
+                    (:name "Cache" :width 6 :align right)
                     (:name "Created at" :width 10
                      :formatter opencode--format-time-ago))
          :objects sessions
-         :actions '("x" opencode-kill-session
-                    "R" opencode-rename-session
-                    "RET" opencode-open-session-same-window
-                    "o" opencode-open-session-same-window)
          :getter (lambda (object column vtable)
                    (let-alist object
                      (pcase (vtable-column vtable column)
-                       ("Title" (opencode--session-title object))
+                       ("Title" (let ((icon (opencode--session-status-icon object)))
+                                  (concat (when icon (concat icon " "))
+                                          (opencode--session-title object))))
                        ("Branch" (if (and .location.directory
                                           (file-exists-p .location.directory))
                                      (let ((default-directory .location.directory))
@@ -1732,6 +1765,21 @@ Prompts are user messages and shell commands, in order."
                                    "-"))
                        ("Last Updated" (opencode--time-ago object 'updated))
                        ("Cost" (format "$%.2f" (or .cost 0)))
+                       ("Tokens" (format "↑%s ↓%s 🧠%s"
+                                         (opencode--format-tokens
+                                          (+ (or .tokens.input 0)
+                                             (or .tokens.cache.read 0)
+                                             (or .tokens.cache.write 0)))
+                                         (opencode--format-tokens .tokens.output)
+                                         (opencode--format-tokens .tokens.reasoning)))
+                       ("Cache" (let ((total (+ (or .tokens.input 0)
+                                                (or .tokens.cache.read 0)
+                                                (or .tokens.cache.write 0))))
+                                  (if (zerop total)
+                                      "-"
+                                    (format "%d%%"
+                                            (round (* 100.0 (or .tokens.cache.read 0))
+                                                   total)))))
                        ("Created at" (opencode--time-ago object 'created)))))
          :separator-width 3
          :keymap opencode-session-control-mode-map)

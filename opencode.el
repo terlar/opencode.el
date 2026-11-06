@@ -212,7 +212,7 @@ directory it was last opened for."
            (setq default-directory directory
                  opencode-session-control-project-id .project.id)
            (opencode-sessions-redisplay)
-           (pop-to-buffer (current-buffer))))))))
+           (switch-to-buffer (current-buffer))))))))
 
 (defun opencode-reload-locations ()
   "Make the server resolve the project of each directory again.
@@ -525,6 +525,7 @@ Also prompts for pending questions or permissions if any."
 (defun opencode--session-finished (session-id)
   "Handle the end of SESSION-ID's execution."
   (opencode-session--set-status session-id "idle")
+  (opencode--redisplay-session-control-buffers)
   (unless (opencode--defer-files-finished-editing-hook session-id)
     (opencode--maybe-run-files-finished-editing-hook session-id))
   (opencode-api-session (session-id)
@@ -555,7 +556,8 @@ Also prompts for pending questions or permissions if any."
           (server.connected nil)
           (tui.toast.show (opencode--toast-show data))
           (session.execution.started
-           (opencode-session--set-status .sessionID "busy"))
+           (opencode-session--set-status .sessionID "busy")
+           (opencode--redisplay-session-control-buffers))
           (session.execution.succeeded (opencode--session-finished .sessionID))
           (session.execution.interrupted
            ;; On a real shutdown the drain resumes after the restart, but the
