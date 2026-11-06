@@ -273,7 +273,9 @@ fix, and set both =comint-scroll-show-maximum-output= and
 - =opencode-session-deleted-functions= is a hook run when a session is deleted
 - =opencode-tool-formatters= can be used to control how tools are displayed
 - =opencode-shown-outputs= lists what to show unfolded: =reasoning=, tool
-names like =shell= or =edit=, or =shell-non-zero= to show shell tool output only when the
-command failed. Shell commands you run yourself are always shown. Shown outputs
-can still be folded the same way.
+  names like =shell= or =edit=, or =shell-non-zero= to show shell tool output only when the
+  command failed. Shell commands you run yourself are always shown. Shown outputs
+  can still be folded the same way.
+- =opencode-open-session-same-window= controls whether to open sessions in a new
+  window or in the current window
 

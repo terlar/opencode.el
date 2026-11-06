@@ -48,8 +48,8 @@ Shown outputs can still be folded manually with `hs-toggle-hiding'."
   (define-keymap
     ;; needed here instead of vtable :actions, as emojify-mode keymap was taking
     ;; precedence over vtable's keymap
-    "RET" (opencode--session-control-command #'opencode-open-session-same-window)
-    "o" (opencode--session-control-command #'opencode-open-session-same-window)
+    "RET" (opencode--session-control-command #'opencode-open-session)
+    "o" (opencode--session-control-command #'opencode-open-session)
     "R" (opencode--session-control-command #'opencode-rename-session)
     "x" (opencode--session-control-command #'opencode-kill-session)
     "r" 'opencode-sessions-redisplay
@@ -258,13 +258,11 @@ Accepts (\"name\" . buffer) to work as a read-buffer predicate."
             sessions
           (opencode--select-sessions "Session: "
                                      sessions
-                                     (format "No sessions in %s" default-directory)
-                                     :pop-to-buffer nil)))))))
+                                     (format "No sessions in %s" default-directory))))))))
 
-(cl-defun opencode--select-sessions (prompt sessions no-sessions-message &key (pop-to-buffer t))
+(defun opencode--select-sessions (prompt sessions no-sessions-message)
   "Select a session from SESSIONS to open.
-Use PROMPT and display NO-SESSIONS-MESSAGE if SESSIONS is empty.
-POP-TO-BUFFER controls whether to pop to or switch to the session buffer."
+Use PROMPT and display NO-SESSIONS-MESSAGE if SESSIONS is empty."
   (if sessions
       (opencode-open-session
        (opencode--annotated-completion
@@ -277,8 +275,7 @@ POP-TO-BUFFER controls whether to pop to or switch to the session buffer."
                                   (opencode--time-ago
                                    session 'updated))
                                  (opencode--time-ago
-                                  session 'updated)))))
-       :pop-to-buffer pop-to-buffer)
+                                  session 'updated))))))
     (message no-sessions-message)))
 
 (defun opencode-select-idle ()
@@ -1407,10 +1404,6 @@ non-zero status are highlighted with the `error' face."
             (set-marker end nil))))
       (set-marker call-end nil))))
 
-(defun opencode-open-session-same-window (session)
-  "Open SESSION using the current window."
-  (opencode-open-session session :pop-to-buffer nil))
-
 (defconst opencode--migrated-tool-names
   '(("bash" . "shell") ("apply_patch" . "patch") ("task" . "subagent"))
   "Old names of tools, that sessions migrated from v1 still have.")
@@ -1555,17 +1548,16 @@ If CALLBACK is given, it will be called with SESSION afterwards."
         (when callback
           (funcall callback session))))))
 
-(cl-defun opencode-open-session (session &key (pop-to-buffer t) callback)
+(cl-defun opencode-open-session (session &key callback)
   "Open comint based shell for SESSION.
-POP-TO-BUFFER controls whether to pop to or switch to the session buffer.
 Returns the buffer.
 If CALLBACK is given, it will be called with the session after it is initialized."
   (let-alist session
     (let ((old-buffer (gethash .id opencode-session-buffers)))
       (if (buffer-live-p old-buffer)
-          (if pop-to-buffer
-              (pop-to-buffer old-buffer)
-            (switch-to-buffer old-buffer))
+          (if opencode-open-session-same-window
+              (switch-to-buffer old-buffer)
+            (pop-to-buffer old-buffer))
         (let ((buffer (generate-new-buffer
                        (format "*OpenCode: %s*" (opencode--session-title session))))
               (agent (copy-tree opencode-session-agent))
@@ -1594,9 +1586,9 @@ If CALLBACK is given, it will be called with the session after it is initialized
               (add-hook 'kill-buffer-hook #'opencode--session-cleanup nil t)
               (opencode-insert-logo)
               (opencode--load-session session callback))
-            (if pop-to-buffer
-                (pop-to-buffer buffer)
-              (switch-to-buffer buffer))))))))
+            (if opencode-open-session-same-window
+                (switch-to-buffer buffer)
+              (pop-to-buffer buffer))))))))
 
 (defun opencode--reload-session ()
   "Redisplay the current session from the server, keeping any typed input.

@@ -827,7 +827,7 @@ If point is before the first prompt, creates a new session instead."
         (opencode-api-fork-session (opencode-session-id)
             `((before . ,(alist-get 'id message)))
             session
-          (opencode-open-session-same-window session))
+          (opencode-open-session session))
       ;; if before the first prompt just open a new session
       (opencode-new-session))))
 

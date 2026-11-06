@@ -118,6 +118,11 @@ Designed to be set in `.dir-locals.el'"
   :type 'hook
   :group 'opencode)
 
+(defcustom opencode-open-session-same-window t
+  "If t use `switch-to-buffer' when opening sessions, otherwise use `pop-to-buffer'."
+  :type 'boolean
+  :group 'opencode)
+
 (defconst opencode--apply-patch-file-header-regexp
   "^\\*\\*\\* \\(Add File\\|Update File\\|Delete File\\): \\(.*\\)$"
   "Regexp matching file operation headers in patch tool input.")
