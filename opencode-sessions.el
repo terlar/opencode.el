@@ -65,8 +65,16 @@ Shown outputs can still be folded manually with `hs-toggle-hiding'."
 (defvar-local opencode-session-control-project-id nil
   "Id of the project whose sessions the session control buffer displays.")
 
+(defvar-local opencode--session-control-sessions nil
+  "Sessions last displayed in the session control buffer.")
+
+(defvar-local opencode--session-control-width nil
+  "Window body width in pixels the session control table was rendered for.")
+
 (define-derived-mode opencode-session-control-mode special-mode "Sessions"
-  "Opencode session control panel mode.")
+  "Opencode session control panel mode."
+  (add-hook 'window-size-change-functions
+            #'opencode--session-control-window-size-change nil t))
 
 (defun opencode--tab-dispatch ()
   "Cycle session agent, or move to next button if point is on one."
@@ -1723,60 +1731,119 @@ Prompts are user messages and shell commands, in order."
   (backward-word 1)
   (recenter-top-bottom 0))
 
+(defvar opencode--session-control-branch-cache (make-hash-table :test #'equal)
+  "Cache of git branch per directory for the session control table.
+Cleared each time the table is displayed.")
+
+(defconst opencode--session-control-columns
+  `((title
+     (:name "Title" :max-width "50%")
+     ,(lambda (object)
+        (let ((icon (opencode--session-status-icon object)))
+          (concat (when icon (concat icon " "))
+                  (opencode--session-title object)))))
+    (branch
+     (:name "Branch" :min-width 6)
+     ,(lambda (object)
+        (let-alist object
+          (if (and .location.directory
+                   (file-exists-p .location.directory))
+              (let ((default-directory .location.directory))
+                (with-memoization (gethash .location.directory
+                                           opencode--session-control-branch-cache)
+                  (or (magit-get-current-branch) "-")))
+            "-"))))
+    (last-update
+     (:name "Last Updated" :width 12
+      :formatter opencode--format-time-ago
+      :primary ascend)
+     ,(lambda (object) (opencode--time-ago object 'updated)))
+    (created-at
+     (:name "Created at" :width 10
+      :formatter opencode--format-time-ago)
+     ,(lambda (object) (opencode--time-ago object 'created)))
+    (cost
+     (:name "Cost" :width 8 :align right)
+     ,(lambda (object)
+        (format "$%.2f" (or (alist-get 'cost object) 0))))
+    (tokens
+     (:name "Tokens")
+     ,(lambda (object)
+        (let-alist object
+          (format "↑%s ↓%s 🧠%s"
+                  (opencode--format-tokens
+                   (+ (or .tokens.input 0)
+                      (or .tokens.cache.read 0)
+                      (or .tokens.cache.write 0)))
+                  (opencode--format-tokens .tokens.output)
+                  (opencode--format-tokens .tokens.reasoning)))))
+    (cache
+     (:name "Cache" :width 6 :align right)
+     ,(lambda (object)
+        (let-alist object
+          (let ((total (+ (or .tokens.input 0)
+                          (or .tokens.cache.read 0)
+                          (or .tokens.cache.write 0))))
+            (if (zerop total)
+                "-"
+              (format "%d%%"
+                      (round (* 100.0 (or .tokens.cache.read 0))
+                             total))))))))
+  "Alist of (KEY VTABLE-COLUMN-SPEC GETTER) for the session control table.
+GETTER is called with the session object.")
+
+(defun opencode--session-control-insert-table (sessions columns)
+  "Insert a vtable of SESSIONS with COLUMNS, a list of column keys."
+  (let* ((columns (mapcar (lambda (key)
+                            (or (alist-get key opencode--session-control-columns)
+                                (error "Unknown session control column: %s" key)))
+                          columns))
+         (getters (vconcat (mapcar #'cadr columns))))
+    (make-vtable
+     :columns (mapcar #'car columns)
+     :objects sessions
+     :getter (lambda (object column _vtable)
+               (funcall (aref getters column) object))
+     :separator-width 3
+     :keymap opencode-session-control-mode-map)))
+
 (defun opencode--session-control-display (sessions)
-  "Display SESSIONS in the current session control buffer."
+  "Display SESSIONS in the current session control buffer.
+Optional columns from `opencode-session-control-table-columns' are
+only shown if the table fits in the window."
+  (setq opencode--session-control-sessions sessions)
+  (clrhash opencode--session-control-branch-cache)
   (let ((inhibit-read-only t)
         (point (point))
-        cache)
+        (window (get-buffer-window (current-buffer) t))
+        (required (plist-get opencode-session-control-table-columns :required))
+        (optional (plist-get opencode-session-control-table-columns :optional)))
     (erase-buffer)
-    (if sessions
-        (make-vtable
-         :columns '((:name "Title" :max-width "50%")
-                    (:name "Branch" :min-width 6)
-                    (:name "Last Updated" :width 12
-                     :formatter opencode--format-time-ago
-                     :primary ascend)
-                    (:name "Cost" :width 8 :align right)
-                    (:name "Tokens")
-                    (:name "Cache" :width 6 :align right)
-                    (:name "Created at" :width 10
-                     :formatter opencode--format-time-ago))
-         :objects sessions
-         :getter (lambda (object column vtable)
-                   (let-alist object
-                     (pcase (vtable-column vtable column)
-                       ("Title" (let ((icon (opencode--session-status-icon object)))
-                                  (concat (when icon (concat icon " "))
-                                          (opencode--session-title object))))
-                       ("Branch" (if (and .location.directory
-                                          (file-exists-p .location.directory))
-                                     (let ((default-directory .location.directory))
-                                       (with-memoization
-                                           (map-elt cache .location.directory)
-                                         (or (magit-get-current-branch) "-")))
-                                   "-"))
-                       ("Last Updated" (opencode--time-ago object 'updated))
-                       ("Cost" (format "$%.2f" (or .cost 0)))
-                       ("Tokens" (format "↑%s ↓%s 🧠%s"
-                                         (opencode--format-tokens
-                                          (+ (or .tokens.input 0)
-                                             (or .tokens.cache.read 0)
-                                             (or .tokens.cache.write 0)))
-                                         (opencode--format-tokens .tokens.output)
-                                         (opencode--format-tokens .tokens.reasoning)))
-                       ("Cache" (let ((total (+ (or .tokens.input 0)
-                                                (or .tokens.cache.read 0)
-                                                (or .tokens.cache.write 0))))
-                                  (if (zerop total)
-                                      "-"
-                                    (format "%d%%"
-                                            (round (* 100.0 (or .tokens.cache.read 0))
-                                                   total)))))
-                       ("Created at" (opencode--time-ago object 'created)))))
-         :separator-width 3
-         :keymap opencode-session-control-mode-map)
-      (insert "No sessions in " (or default-directory "unknown directory")))
+    (if (not sessions)
+        (insert "No sessions in " (or default-directory "unknown directory"))
+      (if (not window)
+          (opencode--session-control-insert-table sessions required)
+        ;; vtable computes percentage widths from the selected window
+        (with-selected-window window
+          (opencode--session-control-insert-table
+           sessions (append required optional))
+          (when (and optional
+                     (> (car (window-text-pixel-size
+                              window (point-min) (point-max) t))
+                        (window-body-width window t)))
+            (erase-buffer)
+            (opencode--session-control-insert-table sessions required)))))
+    (setq opencode--session-control-width
+          (and window (window-body-width window t)))
     (goto-char point)))
+
+(defun opencode--session-control-window-size-change (window)
+  "Redisplay the session control table in WINDOW if its width changed."
+  (with-current-buffer (window-buffer window)
+    (when (and opencode--session-control-sessions
+               (not (eql opencode--session-control-width
+                         (window-body-width window t))))
+      (opencode--session-control-display opencode--session-control-sessions))))
 
 (defun opencode-sessions-redisplay ()
   "Refresh the session display table for DIRECTORY."

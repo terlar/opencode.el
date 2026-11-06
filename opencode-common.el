@@ -123,6 +123,25 @@ Designed to be set in `.dir-locals.el'"
   :type 'boolean
   :group 'opencode)
 
+(defcustom opencode-session-control-table-columns
+  '(:required (title branch last-update created-at)
+    :optional (cost tokens cache))
+  "Columns displayed in the session control table.
+A plist with keys `:required' and `:optional', each a list of column
+symbols.  Columns are displayed in list order, required columns first.
+Optional columns are only displayed if the window is wide enough to
+show all columns."
+  :type (let ((column '(choice (const title)
+                               (const branch)
+                               (const last-update)
+                               (const created-at)
+                               (const cost)
+                               (const tokens)
+                               (const cache))))
+          `(list (const :required) (repeat ,column)
+                 (const :optional) (repeat ,column)))
+  :group 'opencode)
+
 (defconst opencode--apply-patch-file-header-regexp
   "^\\*\\*\\* \\(Add File\\|Update File\\|Delete File\\): \\(.*\\)$"
   "Regexp matching file operation headers in patch tool input.")

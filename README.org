@@ -123,6 +123,7 @@ project.
 [[file:screenshots/session_management.png]]
 
 Here you see a table view with information on all sessions for a given project.
+You can configure what columns are shown with =opencode-session-control-table-columns=.
 
 Shortcuts to act on the session at point:
 
@@ -278,4 +279,6 @@ fix, and set both =comint-scroll-show-maximum-output= and
   can still be folded the same way.
 - =opencode-open-session-same-window= controls whether to open sessions in a new
   window or in the current window
+- =opencode-session-control-table-columns= configures what columns are shown in
+  the session management buffer
 
